@@ -2,7 +2,7 @@
 
 export interface PathRule {
   path: string; // glob: "/messages/*", "/api/dm/*"
-  action: "allow" | "deny";
+  action: "deny"; // deny matching paths; omit paths to allow them
 }
 
 export interface EgressRule {

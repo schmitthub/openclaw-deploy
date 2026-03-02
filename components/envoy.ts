@@ -11,6 +11,8 @@ import {
   ENVOY_CONFIG_HOST_DIR,
   ENVOY_CA_CERT_PATH,
   ENVOY_CA_KEY_PATH,
+  ENVOY_MITM_CERTS_HOST_DIR,
+  ENVOY_MITM_CERTS_CONTAINER_DIR,
 } from "../config";
 import { renderEnvoyConfig } from "../templates";
 
@@ -38,6 +40,8 @@ export class EnvoyEgress extends pulumi.ComponentResource {
   public readonly containerId: pulumi.Output<string>;
   /** Host path to the CA certificate (for gateway NODE_EXTRA_CA_CERTS) */
   public readonly caCertPath: pulumi.Output<string>;
+  /** Domains with MITM TLS inspection enabled (need per-domain certs) */
+  public readonly inspectedDomains: string[];
   /** Warnings from egress policy rendering (e.g. unsupported rule types) */
   public readonly warnings: string[];
 
@@ -50,6 +54,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
 
     // Render envoy config from egress policy (pure function, runs at plan time)
     const envoyConfig = renderEnvoyConfig(args.egressPolicy);
+    this.inspectedDomains = envoyConfig.inspectedDomains;
     this.warnings = envoyConfig.warnings;
 
     // Docker provider connected to the remote host
@@ -112,6 +117,44 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Step 4b: Generate per-domain certificates for MITM inspection (idempotent).
+    // Each inspected domain gets a cert signed by the CA. Uses temp files for the
+    // SAN extension and CSR to avoid process substitution (portability).
+    const domainCertCommands: command.remote.Command[] = [];
+    const HOSTNAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+    for (const domain of envoyConfig.inspectedDomains) {
+      if (!HOSTNAME_RE.test(domain)) {
+        throw new Error(`Invalid domain for MITM cert generation: ${domain}`);
+      }
+      const safeName = domain.replace(/\./g, "-");
+      const certPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${domain}-cert.pem`;
+      const keyPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${domain}-key.pem`;
+
+      const genCert = new command.remote.Command(
+        `${name}-cert-${safeName}`,
+        {
+          connection: args.connection,
+          create: [
+            `mkdir -p ${ENVOY_MITM_CERTS_HOST_DIR}`,
+            `[ -f "${certPath}" ] || (` +
+              `openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes` +
+              ` -subj "/CN=${domain}" -keyout "${keyPath}" -out "/tmp/${domain}.csr" 2>/dev/null` +
+              ` && printf "subjectAltName=DNS:${domain}" > "/tmp/${domain}.ext"` +
+              ` && openssl x509 -req -in "/tmp/${domain}.csr"` +
+              ` -CA ${ENVOY_CA_CERT_PATH} -CAkey ${ENVOY_CA_KEY_PATH}` +
+              ` -CAcreateserial -days 365 -extfile "/tmp/${domain}.ext"` +
+              ` -out "${certPath}" 2>/dev/null` +
+              ` && rm -f "/tmp/${domain}.csr" "/tmp/${domain}.ext"` +
+              ` && chmod 644 "${certPath}" && chmod 640 "${keyPath}"` +
+              `)`,
+          ].join(" && "),
+          delete: `rm -f ${certPath} ${keyPath}`,
+        },
+        { parent: this, dependsOn: [generateCA] },
+      );
+      domainCertCommands.push(genCert);
+    }
+
     // Step 5: Create the Envoy container
     const envoyContainer = new docker.Container(
       `${name}-envoy`,
@@ -141,12 +184,21 @@ export class EnvoyEgress extends pulumi.ComponentResource {
             containerPath: "/etc/envoy/ca-cert.pem",
             readOnly: true,
           },
+          ...(envoyConfig.inspectedDomains.length > 0
+            ? [
+                {
+                  hostPath: ENVOY_MITM_CERTS_HOST_DIR,
+                  containerPath: ENVOY_MITM_CERTS_CONTAINER_DIR,
+                  readOnly: true,
+                },
+              ]
+            : []),
         ],
       },
       {
         parent: this,
         provider: dockerProvider,
-        dependsOn: [writeEnvoyConfig, generateCA, internalNetwork, egressNetwork],
+        dependsOn: [writeEnvoyConfig, generateCA, ...domainCertCommands, internalNetwork, egressNetwork],
       },
     );
 
@@ -167,6 +219,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       egressNetworkName: this.egressNetworkName,
       containerId: this.containerId,
       caCertPath: this.caCertPath,
+      inspectedDomains: this.inspectedDomains,
       warnings: this.warnings,
     });
   }

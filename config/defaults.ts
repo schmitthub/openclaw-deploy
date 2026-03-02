@@ -14,6 +14,11 @@ export const ENVOY_CONFIG_HOST_DIR = "/opt/openclaw-deploy/envoy";
 export const ENVOY_CA_CERT_PATH = "/opt/openclaw-deploy/envoy/ca-cert.pem";
 export const ENVOY_CA_KEY_PATH = "/opt/openclaw-deploy/envoy/ca-key.pem";
 
+// MITM TLS inspection
+export const ENVOY_MITM_CERTS_HOST_DIR = "/opt/openclaw-deploy/envoy/certs";
+export const ENVOY_MITM_CERTS_CONTAINER_DIR = "/etc/envoy/certs";
+export const ENVOY_MITM_CLUSTER_NAME = "mitm_forward_cluster";
+
 // Gateway defaults
 export const DEFAULT_GATEWAY_PORT = 18789;
 export const DEFAULT_BRIDGE_PORT = 18790;
