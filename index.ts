@@ -102,6 +102,7 @@ const gatewayInstances = gateways.map((gw) => {
       configSet: gw.configSet ?? {},
       env: gw.env,
       auth: { mode: "token", token },
+      tcpPortMappings: envoy.tcpPortMappings,
     },
     { dependsOn: [envoy] },
   );

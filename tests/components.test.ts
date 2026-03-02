@@ -339,13 +339,28 @@ describe("EnvoyEgress component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       egressPolicy: [
-        { dst: "git.example.com", proto: "ssh", port: 22, action: "allow" },
+        { dst: "10.0.0.0/24", proto: "ssh", port: 22, action: "allow" },
       ],
     });
 
     expect(envoy.warnings).toHaveLength(1);
-    expect(envoy.warnings[0]).toContain("SSH");
-    expect(envoy.warnings[0]).toContain("Phase 2");
+    expect(envoy.warnings[0]).toContain("CIDR");
+  });
+
+  it("exposes tcpPortMappings from egress policy", async () => {
+    const { EnvoyEgress } = await import("../components/envoy");
+    const envoy = new EnvoyEgress("test-envoy-tcp", {
+      dockerHost: "ssh://root@100.64.0.1",
+      connection: { host: "100.64.0.1", user: "root" },
+      egressPolicy: [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+      ],
+    });
+
+    expect(envoy.tcpPortMappings).toHaveLength(1);
+    expect(envoy.tcpPortMappings[0].dst).toBe("github.com");
+    expect(envoy.tcpPortMappings[0].dstPort).toBe(22);
+    expect(envoy.tcpPortMappings[0].proto).toBe("ssh");
   });
 
   it("exposes caCertPath output for gateway NODE_EXTRA_CA_CERTS", async () => {

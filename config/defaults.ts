@@ -7,6 +7,7 @@ export const EGRESS_NETWORK_NAME = "openclaw-egress";
 // Envoy
 export const ENVOY_IMAGE = "envoyproxy/envoy:v1.33-latest";
 export const ENVOY_EGRESS_PORT = 10000;
+export const ENVOY_TCP_PORT_BASE = 10001;
 export const ENVOY_DNS_PORT = 53;
 export const CLOUDFLARE_DNS_PRIMARY = "1.1.1.2";
 export const CLOUDFLARE_DNS_SECONDARY = "1.0.0.2";

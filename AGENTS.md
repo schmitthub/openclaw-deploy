@@ -157,8 +157,13 @@ that ignores proxy settings, connect on **any port**, or use **any protocol**.
    connects to the real domain, not the attacker's server.
 
 4. **Egress policy engine** — typed rules (`EgressRule`) support domain, IP, and CIDR destinations
-   with protocol-specific handling. SSH and raw TCP rules are reserved for Phase 2 (DNS snooping).
-   MITM TLS inspection for path-level filtering is structured but deferred to Phase 2.
+   with protocol-specific handling. TLS rules use SNI-based passthrough or MITM inspection.
+   SSH and raw TCP rules use per-rule port mapping: each rule gets a dedicated Envoy listener port,
+   and destination-specific iptables DNAT rules in the gateway entrypoint route matching traffic
+   to the correct port. Domain resolution happens at container startup via `getent ahostsv4`.
+   Mapping info flows as the `OPENCLAW_TCP_MAPPINGS` env var (semicolon-delimited `dst:dstPort:envoyPort`).
+   CIDR destinations are not supported for SSH/TCP (emit warning). IPs may change after startup
+   requiring container restart.
 
 5. **Malware-blocking DNS** — Envoy runs a DNS listener (:53 UDP) that forwards all DNS queries to
    Cloudflare's malware-blocking resolvers (1.1.1.2 / 1.0.0.2). These resolvers refuse to resolve
@@ -183,6 +188,10 @@ outbound TCP regardless of what tool, port, or protocol is used.
 - Envoy is the only container on both internal and egress networks.
 - All hardcoded domains (infrastructure + AI providers + Homebrew) are always included in the Envoy domain whitelist.
 - Envoy DNS listener must forward to Cloudflare malware-blocking resolvers (1.1.1.2 / 1.0.0.2).
+- SSH/TCP egress rules must each get a dedicated Envoy listener port (sequential from `ENVOY_TCP_PORT_BASE`).
+- SSH/TCP port mappings must be passed to gateway containers via `OPENCLAW_TCP_MAPPINGS` env var.
+- Entrypoint must process `OPENCLAW_TCP_MAPPINGS` to create per-destination iptables DNAT rules before the TLS catch-all.
+- TCP/SSH Envoy clusters must use `STRICT_DNS` for domain destinations (with Cloudflare dns_resolvers) and `STATIC` for IP destinations.
 
 ## Egress Domain Whitelist
 
@@ -204,8 +213,6 @@ Domain filtering uses TLS SNI inspection — non-TLS protocols are categorically
 ## Future Steps
 
 - Phase 2: DigitalOcean and Oracle Cloud provider support.
-- Phase 2: MITM TLS inspection for path-level egress filtering.
-- Phase 2: SSH/TCP egress rules via DNS snooping.
 - Add CI validation via pre-commit hooks.
 - Expand Pulumi unit tests with mocked components.
 

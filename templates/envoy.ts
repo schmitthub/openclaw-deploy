@@ -2,6 +2,7 @@ import { EgressRule, PathRule } from "../config/types";
 import { mergeEgressPolicy } from "../config/domains";
 import {
   ENVOY_EGRESS_PORT,
+  ENVOY_TCP_PORT_BASE,
   ENVOY_DNS_PORT,
   CLOUDFLARE_DNS_PRIMARY,
   CLOUDFLARE_DNS_SECONDARY,
@@ -9,11 +10,24 @@ import {
   ENVOY_MITM_CLUSTER_NAME,
 } from "../config/defaults";
 
+export interface TcpPortMapping {
+  /** Destination domain or IP */
+  dst: string;
+  /** Destination port (e.g. 22 for SSH, 5432 for PostgreSQL) */
+  dstPort: number;
+  /** Protocol from the egress rule */
+  proto: "ssh" | "tcp";
+  /** Dedicated Envoy listener port for this mapping */
+  envoyPort: number;
+}
+
 export interface EnvoyConfigResult {
   yaml: string;
   warnings: string[];
   /** Domains requiring per-domain certs for MITM TLS inspection */
   inspectedDomains: string[];
+  /** Per-rule port mappings for SSH/TCP egress (passed to gateway entrypoint) */
+  tcpPortMappings: TcpPortMapping[];
 }
 
 interface MitmDomainConfig {
@@ -123,6 +137,75 @@ function renderMitmCluster(): string {
               filename: /etc/ssl/certs/ca-certificates.crt`;
 }
 
+/** Render a dedicated TCP proxy listener for a single SSH/TCP egress rule. */
+function renderTcpListener(mapping: TcpPortMapping): string {
+  const safeName = `${mapping.proto}_${mapping.dst.replace(/\./g, "_")}_${mapping.dstPort}`;
+  const clusterName = `tcp_${safeName}`;
+  return `
+  # ${mapping.proto.toUpperCase()} egress: ${mapping.dst}:${mapping.dstPort} → :${mapping.envoyPort}
+  - name: ${safeName}
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: ${mapping.envoyPort}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: ${safeName}
+          cluster: ${clusterName}`;
+}
+
+/** Render a STRICT_DNS or STATIC cluster for a single SSH/TCP egress rule. */
+function renderTcpCluster(mapping: TcpPortMapping): string {
+  const safeName = `${mapping.proto}_${mapping.dst.replace(/\./g, "_")}_${mapping.dstPort}`;
+  const clusterName = `tcp_${safeName}`;
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(mapping.dst);
+
+  if (isIp) {
+    return `
+  - name: ${clusterName}
+    type: STATIC
+    connect_timeout: 5s
+    load_assignment:
+      cluster_name: ${clusterName}
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: "${mapping.dst}"
+                port_value: ${mapping.dstPort}`;
+  }
+
+  return `
+  - name: ${clusterName}
+    type: STRICT_DNS
+    connect_timeout: 5s
+    dns_lookup_family: V4_PREFERRED
+    typed_dns_resolver_config:
+      name: envoy.network.dns_resolver.cares
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.cares.v3.CaresDnsResolverConfig
+        resolvers:
+        - socket_address:
+            address: "${CLOUDFLARE_DNS_PRIMARY}"
+            port_value: 53
+        - socket_address:
+            address: "${CLOUDFLARE_DNS_SECONDARY}"
+            port_value: 53
+    load_assignment:
+      cluster_name: ${clusterName}
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: "${mapping.dst}"
+                port_value: ${mapping.dstPort}`;
+}
+
 /**
  * Renders envoy.yaml from an egress policy.
  *
@@ -140,6 +223,7 @@ export function renderEnvoyConfig(
   const passthroughDomains: string[] = [];
   const inspectedDomains: string[] = [];
   const mitmConfigs: MitmDomainConfig[] = [];
+  const tcpMappings: TcpPortMapping[] = [];
 
   for (const rule of merged) {
     if (rule.action === "deny") {
@@ -167,16 +251,28 @@ export function renderEnvoyConfig(
         break;
 
       case "ssh":
-        warnings.push(
-          `SSH egress rule for "${rule.dst}" skipped — requires DNS snooping (Phase 2)`,
-        );
+      case "tcp": {
+        if (rule.dst.includes("/")) {
+          warnings.push(
+            `CIDR destination "${rule.dst}" not supported for ${rule.proto.toUpperCase()} egress — use a specific IP or domain`,
+          );
+          break;
+        }
+        if (rule.port === undefined) {
+          warnings.push(
+            `${rule.proto.toUpperCase()} egress rule for "${rule.dst}" missing required port — skipped`,
+          );
+          break;
+        }
+        const envoyPort = ENVOY_TCP_PORT_BASE + tcpMappings.length;
+        tcpMappings.push({
+          dst: rule.dst,
+          dstPort: rule.port,
+          proto: rule.proto,
+          envoyPort,
+        });
         break;
-
-      case "tcp":
-        warnings.push(
-          `TCP egress rule for "${rule.dst}" skipped — requires DNS snooping (Phase 2)`,
-        );
-        break;
+      }
     }
   }
 
@@ -190,6 +286,9 @@ export function renderEnvoyConfig(
 
   const hasMitm = inspectedDomains.length > 0;
   const mitmClusterSection = hasMitm ? renderMitmCluster() : "";
+
+  const tcpListenerSection = tcpMappings.map(renderTcpListener).join("\n");
+  const tcpClusterSection = tcpMappings.map(renderTcpCluster).join("\n");
 
   const yaml = `# Generated by openclaw-deploy. Do not edit directly.
 #
@@ -271,7 +370,7 @@ ${domainLines}
               - socket_address:
                   address: "${CLOUDFLARE_DNS_SECONDARY}"
                   port_value: 53
-
+${tcpListenerSection}
   clusters:
   - name: dynamic_forward_proxy_cluster
     lb_policy: CLUSTER_PROVIDED
@@ -283,6 +382,7 @@ ${domainLines}
           name: dynamic_forward_proxy_cache
           dns_lookup_family: V4_PREFERRED
 ${mitmClusterSection}
+${tcpClusterSection}
   - name: deny_cluster
     type: STATIC
     connect_timeout: 0.25s
@@ -290,5 +390,5 @@ ${mitmClusterSection}
       cluster_name: deny_cluster
 `;
 
-  return { yaml, warnings, inspectedDomains };
+  return { yaml, warnings, inspectedDomains, tcpPortMappings: tcpMappings };
 }

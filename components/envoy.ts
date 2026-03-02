@@ -14,7 +14,7 @@ import {
   ENVOY_MITM_CERTS_HOST_DIR,
   ENVOY_MITM_CERTS_CONTAINER_DIR,
 } from "../config";
-import { renderEnvoyConfig } from "../templates";
+import { renderEnvoyConfig, TcpPortMapping } from "../templates";
 
 export interface EnvoyEgressArgs {
   /** Docker host URI, e.g. "ssh://root@<ip>" */
@@ -42,6 +42,8 @@ export class EnvoyEgress extends pulumi.ComponentResource {
   public readonly caCertPath: pulumi.Output<string>;
   /** Domains with MITM TLS inspection enabled (need per-domain certs) */
   public readonly inspectedDomains: string[];
+  /** Per-rule port mappings for SSH/TCP egress (passed to gateway containers) */
+  public readonly tcpPortMappings: TcpPortMapping[];
   /** Warnings from egress policy rendering (e.g. unsupported rule types) */
   public readonly warnings: string[];
 
@@ -55,6 +57,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
     // Render envoy config from egress policy (pure function, runs at plan time)
     const envoyConfig = renderEnvoyConfig(args.egressPolicy);
     this.inspectedDomains = envoyConfig.inspectedDomains;
+    this.tcpPortMappings = envoyConfig.tcpPortMappings;
     this.warnings = envoyConfig.warnings;
 
     // Docker provider connected to the remote host
@@ -220,6 +223,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       containerId: this.containerId,
       caCertPath: this.caCertPath,
       inspectedDomains: this.inspectedDomains,
+      tcpPortMappings: this.tcpPortMappings,
       warnings: this.warnings,
     });
   }

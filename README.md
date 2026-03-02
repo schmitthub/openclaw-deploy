@@ -29,7 +29,7 @@ Pulumi TypeScript IaC that provisions remote VPS hosts and deploys [OpenClaw](ht
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Remote VPS (Hetzner)                                               │
+│  Remote VPS (Hetzner / DigitalOcean / Oracle Cloud)                 │
 │                                                                     │
 │   Tailscale Serve/Funnel ──┐                                       │
 │     (ingress: HTTPS, WSS)  │                                       │
@@ -46,25 +46,30 @@ Pulumi TypeScript IaC that provisions remote VPS hosts and deploys [OpenClaw](ht
 │   │   │  entrypoint.sh (root, immutable): │                     │   │
 │   │   │  ┌─────────────────────────────┐  │                     │   │
 │   │   │  │ ip route default via Envoy  │  │                     │   │
-│   │   │  │ NAT: ALL TCP → DNAT Envoy   │  │                     │   │
+│   │   │  │ NAT: SSH/TCP → DNAT :10001+ │  │                     │   │
+│   │   │  │ NAT: ALL TCP → DNAT :10000  │  │                     │   │
 │   │   │  │ FILTER: OUTPUT DROP default │  │                     │   │
 │   │   │  │ gosu → drops to node user   │  │                     │   │
 │   │   │  └─────────────────────────────┘  │                     │   │
 │   │   └───────────────────────────────────┘                     │   │
 │   │              ... (N gateways per server)                    │   │
 │   │                                                             │   │
-│   │                  ┌─────────────────────────┐                │   │
-│   │    Internet ◄──► │  Envoy (172.28.0.2)     │                │   │
-│   │   (whitelisted   │                         │                │   │
-│   │    domains only) │  Egress (:10000):        │                │   │
-│   │                  │  • TLS Inspector (SNI)  │                │   │
-│   │    Cloudflare    │  • Domain whitelist      │                │   │
-│   │    1.1.1.2 ◄──   │  • Non-TLS = DENIED     │                │   │
-│   │    1.0.0.2       │                         │                │   │
-│   │                  │  DNS (:53 UDP):          │                │   │
-│   │                  │  • → Cloudflare (malware │                │   │
-│   │                  │    blocking resolvers)   │                │   │
-│   │                  └─────────────────────────┘                │   │
+│   │                  ┌──────────────────────────┐               │   │
+│   │    Internet ◄──► │  Envoy (172.28.0.2)      │               │   │
+│   │   (whitelisted   │                          │               │   │
+│   │    domains only) │  TLS (:10000):           │               │   │
+│   │                  │  • TLS Inspector (SNI)   │               │   │
+│   │    Cloudflare    │  • Domain whitelist       │               │   │
+│   │    1.1.1.2 ◄──   │  • MITM inspection (opt) │               │   │
+│   │    1.0.0.2       │                          │               │   │
+│   │                  │  SSH/TCP (:10001+):       │               │   │
+│   │                  │  • Per-rule tcp_proxy     │               │   │
+│   │                  │  • STRICT_DNS / STATIC    │               │   │
+│   │                  │                          │               │   │
+│   │                  │  DNS (:53 UDP):           │               │   │
+│   │                  │  • → Cloudflare (malware  │               │   │
+│   │                  │    blocking resolvers)    │               │   │
+│   │                  └──────────────────────────┘               │   │
 │   └─────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │   Tailscale daemon (host-level, manages Serve/Funnel)              │
@@ -87,17 +92,18 @@ One Pulumi stack = one server. Each server runs N gateway instances sharing a si
 | Layer | Mechanism | What it stops | Bypassable by `node` user? |
 |-------|-----------|---------------|---------------------------|
 | **1. Network isolation** | Docker `internal: true` network | No default route to internet — no IP to reach | No |
-| **2. iptables DNAT + FILTER** | Root-owned rules: all outbound TCP → Envoy:10000 | Every TCP connection goes through Envoy | No (`CAP_NET_ADMIN` required, root only) |
-| **3. Envoy SNI whitelist** | TLS Inspector reads SNI, forwards only whitelisted domains | Non-whitelisted HTTPS, all non-TLS (SSH, HTTP, raw TCP) | No (Envoy resolves DNS independently) |
-| **4. Egress policy engine** | Typed `EgressRule[]` with domain/IP/CIDR + protocol support | Structured policy control beyond simple domain lists | No (Envoy config, not in container) |
+| **2. iptables DNAT + FILTER** | Root-owned rules: SSH/TCP → specific Envoy ports, all other TCP → Envoy:10000 | Every TCP connection goes through Envoy | No (`CAP_NET_ADMIN` required, root only) |
+| **3. Envoy protocol-aware whitelist** | TLS: SNI inspection + domain whitelist. SSH/TCP: per-rule port-mapped listeners | Non-whitelisted HTTPS, non-mapped SSH/TCP, plain HTTP | No (Envoy resolves DNS independently) |
+| **4. Egress policy engine** | Typed `EgressRule[]` with domain/IP + protocol support (TLS, SSH, TCP) | Structured policy control with per-protocol handling | No (Envoy config, not in container) |
 | **5. Malware-blocking DNS** | Cloudflare 1.1.1.2 / 1.0.0.2 via Envoy DNS listener | Known malware, phishing, and C2 domains | No (Envoy resolves DNS, containers cannot override) |
 
 **Why SNI spoofing doesn't work:** If an attacker forges the SNI to `api.anthropic.com` while connecting to `evil.com`'s IP, Envoy resolves `api.anthropic.com` via DNS independently and connects to the **real** IP — not the attacker's server.
 
-**What gets blocked:**
+**What gets blocked / allowed:**
 - `curl https://evil.com` — SNI not in whitelist → **BLOCKED**
-- `ssh user@evil.com` — no TLS, no SNI → **BLOCKED**
-- `ncat evil.com 4444` — no TLS → **BLOCKED**
+- `ssh user@evil.com` — no SSH egress rule configured → **BLOCKED**
+- `ssh git@github.com` — SSH rule with port 22 in egressPolicy → **ALLOWED** (via dedicated Envoy listener)
+- `ncat evil.com 4444` — no matching TCP rule → **BLOCKED**
 - `python3 -c "import socket; s.connect(('1.2.3.4', 443))"` — no SNI → **BLOCKED**
 - `curl https://api.anthropic.com` — SNI matches whitelist → **ALLOWED**
 
@@ -106,7 +112,7 @@ One Pulumi stack = one server. Each server runs N gateway instances sharing a si
 - [Node.js](https://nodejs.org/) (v18+)
 - [Pulumi CLI](https://www.pulumi.com/docs/install/)
 - [Tailscale](https://tailscale.com/) account with an auth key
-- A Hetzner Cloud account with an SSH key uploaded (Phase 1; DigitalOcean/Oracle planned)
+- A VPS provider account with an SSH key uploaded: [Hetzner Cloud](https://www.hetzner.com/cloud), [DigitalOcean](https://www.digitalocean.com/), or [Oracle Cloud](https://www.oracle.com/cloud/)
 
 ## Quickstart
 
@@ -131,7 +137,7 @@ pulumi up
 ```
 
 `pulumi up` will:
-1. Provision a Hetzner VPS
+1. Provision a VPS (Hetzner, DigitalOcean, or Oracle Cloud)
 2. Install Docker + Tailscale on the host (switching to Tailscale IP for subsequent commands)
 3. Create Docker networks + deploy Envoy egress proxy
 4. Build gateway Docker images (with baked packages) and deploy containers
@@ -144,7 +150,7 @@ Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for 
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `provider` | `"hetzner"` | yes | VPS provider (DigitalOcean/Oracle Phase 2) |
+| `provider` | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes | VPS provider |
 | `serverType` | string | yes | Server type (e.g. `cx22`, `cax21`) |
 | `region` | string | yes | Datacenter region (e.g. `fsn1`) |
 | `sshKeyId` | string | yes | SSH key ID at provider |
@@ -171,7 +177,7 @@ Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for 
 Components compose sequentially — each depends on the previous:
 
 ```
-Server (Hetzner VPS provisioning)
+Server (VPS provisioning: Hetzner / DigitalOcean / Oracle)
   ↓ connection (public IP SSH)
 HostBootstrap (Docker + Tailscale install)
   ↓ tailscaleIP, dockerHost (switches to Tailscale IP)
@@ -183,14 +189,14 @@ Gateway(s) (1+ OpenClaw instances per server)
 
 | Component | Pulumi Type | Provider | Purpose |
 |-----------|-------------|----------|---------|
-| `Server` | `openclaw:infra:Server` | `@pulumi/hcloud` | Provision VPS, expose IP + SSH connection |
+| `Server` | `openclaw:infra:Server` | `@pulumi/hcloud` / DO / OCI | Provision VPS, expose IP + SSH connection |
 | `HostBootstrap` | `openclaw:infra:HostBootstrap` | `@pulumi/command` | Install Docker + Tailscale on bare host |
 | `EnvoyEgress` | `openclaw:infra:EnvoyEgress` | `@pulumi/docker` + `@pulumi/command` | Create networks, deploy Envoy |
 | `Gateway` | `openclaw:app:Gateway` | `@pulumi/docker` + `@pulumi/command` | Build image, deploy container, configure gateway |
 
 ## Egress Domain Whitelist
 
-Envoy only forwards TLS connections with whitelisted SNI. All other traffic is denied.
+Envoy enforces protocol-aware egress filtering: TLS connections are filtered by SNI whitelist, SSH/TCP connections are forwarded via per-rule dedicated listeners, and all other traffic is denied.
 
 **Always included (hardcoded, cannot be removed):**
 
@@ -203,7 +209,7 @@ Envoy only forwards TLS connections with whitelisted SNI. All other traffic is d
 User-defined `egressPolicy` rules are **additive** — hardcoded domains are always present. Duplicates are deduplicated by `mergeEgressPolicy()`.
 
 ```yaml
-# Example: add Discord domains to egress policy
+# Example: TLS domains, SSH access, and TCP database
 openclaw-deploy:egressPolicy:
   - dst: "discord.com"
     proto: tls
@@ -214,7 +220,17 @@ openclaw-deploy:egressPolicy:
   - dst: "cdn.discordapp.com"
     proto: tls
     action: allow
+  - dst: "github.com"
+    proto: ssh
+    port: 22
+    action: allow
+  - dst: "db.example.com"
+    proto: tcp
+    port: 5432
+    action: allow
 ```
+
+SSH/TCP rules use per-rule port mapping: each rule gets a dedicated Envoy listener port (starting from 10001), and destination-specific iptables DNAT rules in the gateway entrypoint route matching traffic to the correct port. Domain resolution happens at container startup.
 
 ## Common Operations
 
@@ -259,7 +275,7 @@ Pulumi.yaml                 # Pulumi project metadata
 Pulumi.dev.yaml.example     # Example stack config
 components/
   index.ts                  # Re-exports
-  server.ts                 # VPS provisioning (Hetzner; DO/Oracle Phase 2)
+  server.ts                 # VPS provisioning (Hetzner / DigitalOcean / Oracle)
   bootstrap.ts              # Docker + Tailscale install on bare host
   envoy.ts                  # Egress proxy: networks + Envoy container
   gateway.ts                # OpenClaw gateway instance + config + Tailscale
@@ -282,7 +298,6 @@ tests/
 
 ## Known Limitations
 
-- **Hetzner only** — DigitalOcean and Oracle Cloud providers planned for Phase 2.
-- **TLS-only egress filtering** — SSH and raw TCP egress rules require DNS snooping (Phase 2).
-- **No MITM TLS inspection** — Path-level filtering for HTTPS is structured but deferred to Phase 2.
+- **SSH/TCP egress: startup-time DNS resolution** — SSH/TCP rules resolve domains to IPs at container startup. IP changes require a container restart.
+- **No CIDR destinations for SSH/TCP** — SSH and TCP egress rules require specific domain or IP destinations (CIDR ranges emit a warning and are skipped).
 - **Tailscale Funnel port limits** — Funnel is limited to ports 443, 8443, 10000 (max 3 public gateways per server).

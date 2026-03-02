@@ -8,7 +8,7 @@ import {
   ENVOY_STATIC_IP,
   ENVOY_CA_CERT_PATH,
 } from "../config";
-import { renderDockerfile, renderEntrypoint } from "../templates";
+import { renderDockerfile, renderEntrypoint, TcpPortMapping } from "../templates";
 
 export interface GatewayArgs {
   /** Docker host URI, e.g. "ssh://root@<ip>" */
@@ -37,6 +37,8 @@ export interface GatewayArgs {
   env?: Record<string, string>;
   /** Auth configuration for this gateway */
   auth: { mode: string; token: pulumi.Input<string> };
+  /** Per-rule port mappings for SSH/TCP egress (from EnvoyEgress) */
+  tcpPortMappings?: TcpPortMapping[];
 }
 
 export class Gateway extends pulumi.ComponentResource {
@@ -134,6 +136,9 @@ export class Gateway extends pulumi.ComponentResource {
           `HOME=/home/node`,
           `TERM=xterm-256color`,
           `NODE_EXTRA_CA_CERTS=${ENVOY_CA_CERT_PATH}`,
+          ...(args.tcpPortMappings && args.tcpPortMappings.length > 0
+            ? [`OPENCLAW_TCP_MAPPINGS=${args.tcpPortMappings.map((m) => `${m.dst}:${m.dstPort}:${m.envoyPort}`).join(";")}`]
+            : []),
           ...Object.entries(args.env ?? {}).map(([k, v]) => `${k}=${v}`),
         ],
         command: [

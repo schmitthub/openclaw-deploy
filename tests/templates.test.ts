@@ -321,6 +321,58 @@ describe("renderEntrypoint", () => {
     expect(ep).toContain("iptables -t nat -F OUTPUT");
   });
 
+  describe("TCP mappings", () => {
+    it("contains OPENCLAW_TCP_MAPPINGS env var reference", () => {
+      expect(ep).toContain("OPENCLAW_TCP_MAPPINGS");
+    });
+
+    it("parses semicolon-delimited entries", () => {
+      expect(ep).toContain("IFS=';'");
+      expect(ep).toContain("TCP_ENTRIES");
+    });
+
+    it("resolves domains via getent ahostsv4", () => {
+      expect(ep).toContain("getent ahostsv4");
+    });
+
+    it("handles IP destinations without resolution", () => {
+      // Should check if DST is already an IP and skip resolution
+      expect(ep).toContain("grep -qE");
+      expect(ep).toMatch(/\[0-9\]\{1,3\}/);
+      expect(ep).toContain('RESOLVED_IP="$DST"');
+    });
+
+    it("per-destination DNAT rules appear before catch-all", () => {
+      const tcpMappingIdx = ep.indexOf("OPENCLAW_TCP_MAPPINGS");
+      const catchAllIdx = ep.indexOf(
+        `--to-destination "$ENVOY_IP":${ENVOY_EGRESS_PORT}`,
+      );
+      expect(tcpMappingIdx).toBeGreaterThan(-1);
+      expect(catchAllIdx).toBeGreaterThan(-1);
+      expect(tcpMappingIdx).toBeLessThan(catchAllIdx);
+    });
+
+    it("warns on malformed entries", () => {
+      expect(ep).toContain("malformed TCP mapping");
+    });
+
+    it("warns on unresolvable domains", () => {
+      expect(ep).toContain("cannot resolve");
+      expect(ep).toContain("TCP mapping");
+    });
+
+    it("uses DNAT to route to specific Envoy port per mapping", () => {
+      expect(ep).toContain(
+        '-j DNAT --to-destination "$ENVOY_IP":"$ENVOY_PORT"',
+      );
+    });
+
+    it("only processes mappings when env var is set", () => {
+      // Should be conditional on OPENCLAW_TCP_MAPPINGS being non-empty
+      expect(ep).toContain('${OPENCLAW_TCP_MAPPINGS:-}');
+    });
+  });
+
   it("is valid bash — no TypeScript interpolation artifacts", () => {
     // Template literals with ${} should be bash variables, not TS artifacts
     // Check there are no unescaped TS template expressions
@@ -330,9 +382,9 @@ describe("renderEntrypoint", () => {
     // All ${...} in the output should be valid bash variable references
     const templateExpressions = ep.match(/\$\{[^}]+\}/g) ?? [];
     for (const expr of templateExpressions) {
-      // Bash variable patterns: ${VAR}, ${VAR%.*}, ${VAR:-default}
+      // Bash variable patterns: ${VAR}, ${VAR%.*}, ${VAR:-default}, ${VAR[@]}
       expect(expr).toMatch(
-        /^\$\{[A-Z_][A-Z0-9_]*(%\.\*|:-[^}]*|#[^}]*|##[^}]*)?\}$/,
+        /^\$\{[A-Z_][A-Z0-9_]*(%\.\*|:-[^}]*|#[^}]*|##[^}]*|\[@\])?\}$/,
       );
     }
   });

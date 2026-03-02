@@ -9,6 +9,7 @@ import {
 } from "../config/domains";
 import {
   ENVOY_EGRESS_PORT,
+  ENVOY_TCP_PORT_BASE,
   ENVOY_DNS_PORT,
   CLOUDFLARE_DNS_PRIMARY,
   CLOUDFLARE_DNS_SECONDARY,
@@ -200,7 +201,7 @@ describe("renderEnvoyConfig", () => {
     });
   });
 
-  describe("phase 2 warnings", () => {
+  describe("SSH/TCP egress warnings", () => {
     it("does not warn for inspect:true TLS rules (MITM implemented)", () => {
       const userRules: EgressRule[] = [
         {
@@ -216,37 +217,63 @@ describe("renderEnvoyConfig", () => {
       expect(inspectedDomains).toContain("api.slack.com");
     });
 
-    it("warns for SSH rules", () => {
+    it("does not warn for valid SSH rules with port", () => {
       const userRules: EgressRule[] = [
         { dst: "git.example.com", proto: "ssh", port: 22, action: "allow" },
       ];
-      const { warnings } = renderEnvoyConfig(userRules);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("git.example.com");
-      expect(warnings[0]).toContain("SSH");
-      expect(warnings[0]).toContain("Phase 2");
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(0);
+      expect(tcpPortMappings).toHaveLength(1);
     });
 
-    it("warns for TCP rules", () => {
+    it("does not warn for valid TCP rules with port", () => {
       const userRules: EgressRule[] = [
         { dst: "db.internal.com", proto: "tcp", port: 5432, action: "allow" },
       ];
-      const { warnings } = renderEnvoyConfig(userRules);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("db.internal.com");
-      expect(warnings[0]).toContain("TCP");
-      expect(warnings[0]).toContain("Phase 2");
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(0);
+      expect(tcpPortMappings).toHaveLength(1);
     });
 
-    it("accumulates warnings for SSH and TCP (not for inspect:true)", () => {
+    it("warns for CIDR SSH destinations", () => {
       const userRules: EgressRule[] = [
-        { dst: "a.com", proto: "tls", action: "allow", inspect: true },
-        { dst: "b.com", proto: "ssh", port: 22, action: "allow" },
-        { dst: "c.com", proto: "tcp", port: 8080, action: "allow" },
+        { dst: "10.0.0.0/24", proto: "ssh", port: 22, action: "allow" },
       ];
-      const { warnings } = renderEnvoyConfig(userRules);
-      // Only SSH and TCP generate warnings; inspect:true is now implemented
-      expect(warnings).toHaveLength(2);
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("CIDR");
+      expect(warnings[0]).toContain("10.0.0.0/24");
+      expect(tcpPortMappings).toHaveLength(0);
+    });
+
+    it("warns for CIDR TCP destinations", () => {
+      const userRules: EgressRule[] = [
+        { dst: "192.168.1.0/24", proto: "tcp", port: 5432, action: "allow" },
+      ];
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("CIDR");
+      expect(tcpPortMappings).toHaveLength(0);
+    });
+
+    it("warns for SSH rules missing port", () => {
+      const userRules: EgressRule[] = [
+        { dst: "git.example.com", proto: "ssh", action: "allow" },
+      ];
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("missing required port");
+      expect(tcpPortMappings).toHaveLength(0);
+    });
+
+    it("warns for TCP rules missing port", () => {
+      const userRules: EgressRule[] = [
+        { dst: "db.example.com", proto: "tcp", action: "allow" },
+      ];
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("missing required port");
+      expect(tcpPortMappings).toHaveLength(0);
     });
 
     it("does not warn for SSH deny rules", () => {
@@ -255,6 +282,174 @@ describe("renderEnvoyConfig", () => {
       ];
       const { warnings } = renderEnvoyConfig(userRules);
       expect(warnings).toHaveLength(0);
+    });
+
+    it("mixed valid and invalid rules accumulate only invalid warnings", () => {
+      const userRules: EgressRule[] = [
+        { dst: "a.com", proto: "tls", action: "allow", inspect: true },
+        { dst: "b.com", proto: "ssh", port: 22, action: "allow" },
+        { dst: "10.0.0.0/8", proto: "tcp", port: 8080, action: "allow" },
+      ];
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      // Only CIDR TCP generates a warning
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("CIDR");
+      expect(tcpPortMappings).toHaveLength(1);
+    });
+  });
+
+  describe("SSH/TCP egress", () => {
+    it("assigns sequential ports starting from ENVOY_TCP_PORT_BASE", () => {
+      const userRules: EgressRule[] = [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+        { dst: "db.example.com", proto: "tcp", port: 5432, action: "allow" },
+        { dst: "redis.example.com", proto: "tcp", port: 6379, action: "allow" },
+      ];
+      const { tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(tcpPortMappings).toHaveLength(3);
+      expect(tcpPortMappings[0].envoyPort).toBe(ENVOY_TCP_PORT_BASE);
+      expect(tcpPortMappings[1].envoyPort).toBe(ENVOY_TCP_PORT_BASE + 1);
+      expect(tcpPortMappings[2].envoyPort).toBe(ENVOY_TCP_PORT_BASE + 2);
+    });
+
+    it("creates dedicated listener per SSH rule", () => {
+      const userRules: EgressRule[] = [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(tcpPortMappings).toHaveLength(1);
+      expect(yaml).toContain(`port_value: ${ENVOY_TCP_PORT_BASE}`);
+      expect(yaml).toContain("ssh_github_com_22");
+      expect(yaml).toContain("tcp_ssh_github_com_22");
+    });
+
+    it("creates dedicated listener per TCP rule", () => {
+      const userRules: EgressRule[] = [
+        { dst: "db.example.com", proto: "tcp", port: 5432, action: "allow" },
+      ];
+      const { yaml, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(tcpPortMappings).toHaveLength(1);
+      expect(yaml).toContain("tcp_db_example_com_5432");
+    });
+
+    it("uses STRICT_DNS cluster for domain destinations", () => {
+      const userRules: EgressRule[] = [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      expect(yaml).toContain("type: STRICT_DNS");
+      expect(yaml).toContain(`address: "${CLOUDFLARE_DNS_PRIMARY}"`);
+    });
+
+    it("uses STATIC cluster for IP destinations", () => {
+      const userRules: EgressRule[] = [
+        { dst: "140.82.121.4", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      // Extract the clusters section, then find the TCP cluster for this IP
+      const clustersSection = yaml.split(/\n {2}clusters:\n/)[1]!;
+      const tcpClusterIdx = clustersSection.indexOf("tcp_ssh_140_82_121_4_22");
+      expect(tcpClusterIdx).toBeGreaterThan(-1);
+      const tcpCluster = clustersSection.substring(tcpClusterIdx);
+      expect(tcpCluster).toContain("type: STATIC");
+      expect(tcpCluster).toContain('"140.82.121.4"');
+    });
+
+    it("STATIC cluster for IP has no dns_resolvers", () => {
+      const userRules: EgressRule[] = [
+        { dst: "140.82.121.4", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      // Extract the TCP cluster section for the IP
+      const clusterStart = yaml.indexOf("tcp_ssh_140_82_121_4_22");
+      const afterCluster = yaml.substring(clusterStart);
+      const nextClusterOrEnd = afterCluster.indexOf("\n  - name:", 1);
+      const clusterBlock = nextClusterOrEnd > 0
+        ? afterCluster.substring(0, nextClusterOrEnd)
+        : afterCluster;
+      expect(clusterBlock).not.toContain("dns_resolver");
+    });
+
+    it("deny rules produce no listener or mapping", () => {
+      const userRules: EgressRule[] = [
+        { dst: "evil.com", proto: "ssh", port: 22, action: "deny" },
+        { dst: "bad.com", proto: "tcp", port: 5432, action: "deny" },
+      ];
+      const { yaml, tcpPortMappings, warnings } = renderEnvoyConfig(userRules);
+      expect(tcpPortMappings).toHaveLength(0);
+      expect(warnings).toHaveLength(0);
+      expect(yaml).not.toContain("evil_com");
+      expect(yaml).not.toContain("bad_com");
+    });
+
+    it("mixed TLS + SSH + TCP all work together", () => {
+      const userRules: EgressRule[] = [
+        { dst: "custom.example.com", proto: "tls", action: "allow" },
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+        { dst: "db.example.com", proto: "tcp", port: 5432, action: "allow" },
+      ];
+      const { yaml, warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(0);
+      // TLS domain in passthrough
+      expect(yaml).toContain('"custom.example.com"');
+      // SSH + TCP mappings
+      expect(tcpPortMappings).toHaveLength(2);
+      expect(yaml).toContain("ssh_github_com_22");
+      expect(yaml).toContain("tcp_db_example_com_5432");
+    });
+
+    it("returns empty tcpPortMappings for default config", () => {
+      const { tcpPortMappings } = renderEnvoyConfig();
+      expect(tcpPortMappings).toHaveLength(0);
+    });
+
+    it("TCP listeners appear after DNS listener in YAML", () => {
+      const userRules: EgressRule[] = [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      const dnsIdx = yaml.indexOf("- name: dns");
+      const tcpIdx = yaml.indexOf("ssh_github_com_22");
+      expect(dnsIdx).toBeGreaterThan(-1);
+      expect(tcpIdx).toBeGreaterThan(-1);
+      expect(tcpIdx).toBeGreaterThan(dnsIdx);
+    });
+
+    it("cluster count increases with TCP rules", () => {
+      const userRules: EgressRule[] = [
+        { dst: "a.com", proto: "ssh", port: 22, action: "allow" },
+        { dst: "b.com", proto: "tcp", port: 5432, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      const clustersSection = yaml.split(/\n {2}clusters:\n/)[1];
+      expect(clustersSection).toBeDefined();
+      const clusterEntries = clustersSection!.match(/^ {2}- name:/gm);
+      // 2 base (dynamic_forward_proxy + deny) + 2 TCP = 4
+      expect(clusterEntries).toHaveLength(4);
+    });
+
+    it("preserves correct mapping metadata", () => {
+      const userRules: EgressRule[] = [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(tcpPortMappings[0]).toEqual({
+        dst: "github.com",
+        dstPort: 22,
+        proto: "ssh",
+        envoyPort: ENVOY_TCP_PORT_BASE,
+      });
+    });
+
+    it("uses tcp_proxy filter for TCP listeners", () => {
+      const userRules: EgressRule[] = [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      // Count tcp_proxy occurrences — should have catch-all egress + deny + TCP listener
+      const tcpProxyMatches = yaml.match(/envoy\.filters\.network\.tcp_proxy/g);
+      // egress allowed + egress denied + 1 TCP listener = 3
+      expect(tcpProxyMatches!.length).toBeGreaterThanOrEqual(3);
     });
   });
 
@@ -319,7 +514,7 @@ describe("renderEnvoyConfig", () => {
       expect(yaml).toMatch(/^# Generated by openclaw-deploy/);
     });
 
-    it("has exactly two listeners (egress and dns)", () => {
+    it("has exactly two listeners when no SSH/TCP rules (egress and dns)", () => {
       const { yaml } = renderEnvoyConfig();
       const listenerMatches = yaml.match(/- name: (egress|dns)/g);
       expect(listenerMatches).toHaveLength(2);
@@ -327,7 +522,7 @@ describe("renderEnvoyConfig", () => {
       expect(listenerMatches).toContain("- name: dns");
     });
 
-    it("has exactly two clusters", () => {
+    it("has exactly two clusters when no SSH/TCP rules", () => {
       const { yaml } = renderEnvoyConfig();
       // Extract the clusters section and count entries
       const clustersSection = yaml.split(/\n {2}clusters:\n/)[1];

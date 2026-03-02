@@ -43,9 +43,11 @@ The `entrypoint.sh` script enforces transparent egress isolation via iptables:
 2. Derives `INTERNAL_SUBNET` from Envoy's IP (strip last octet, append `.0/24`)
 3. Adds default route via Envoy (`ip route add default via $ENVOY_IP`) — required because `internal: true` networks have no gateway
 4. Flushes existing rules, then restores Docker's `DOCKER_OUTPUT` chain jump (Docker DNS depends on it)
-5. NAT table: skip DNAT for loopback (`-o lo`) and internal subnet, then DNAT all other outbound TCP to Envoy's transparent proxy listener (:10000)
-6. FILTER table: `OUTPUT DROP` default policy. Allows: loopback, Docker DNS (127.0.0.11:53 UDP), established/related, internal subnet
-7. Drops to `node` user via `exec gosu node "$@"`
+5. NAT table: skip DNAT for loopback (`-o lo`) and internal subnet
+6. Processes `OPENCLAW_TCP_MAPPINGS` env var (if set) — per-destination DNAT rules for SSH/TCP egress. Each semicolon-delimited entry (`dst:dstPort:envoyPort`) resolves the domain to IP via `getent ahostsv4` and adds a destination-specific iptables DNAT rule routing matching traffic to a dedicated Envoy listener port. IP destinations skip resolution. Malformed entries and unresolvable domains emit warnings and are skipped.
+7. Catch-all DNAT: all remaining outbound TCP to Envoy's transparent TLS proxy listener (:10000)
+8. FILTER table: `OUTPUT DROP` default policy. Allows: loopback, Docker DNS (127.0.0.11:53 UDP), established/related, internal subnet
+9. Drops to `node` user via `exec gosu node "$@"`
 
 Apps are unaware of the proxy — they connect normally and iptables rewrites the destination.
 The `node` user cannot modify iptables rules (requires `CAP_NET_ADMIN` which only root has).
@@ -56,11 +58,12 @@ The `node` user cannot modify iptables rules (requires `CAP_NET_ADMIN` which onl
 - **DNS listener (:53 UDP)**: Forwards DNS queries to Cloudflare malware-blocking resolvers (1.1.1.2 / 1.0.0.2). Uses `envoy.filters.udp.dns_filter` with c-ares resolver.
 - TLS Inspector listener filter reads SNI from ClientHello without terminating TLS (no MITM)
 - Domain ACL via `filter_chain_match.server_names` matching TLS SNI
-- Non-TLS traffic (SSH, plain HTTP, raw TCP) is categorically denied — no SNI to inspect
+- Non-TLS, non-mapped traffic (plain HTTP, unmapped raw TCP) is denied — no SNI to inspect and no port mapping
 - `sni_dynamic_forward_proxy` resolves whitelisted domains via DNS and forwards to port 443
 - `deny_cluster` (STATIC, no endpoints) immediately resets non-whitelisted connections
+- **SSH/TCP listeners (:10001+)**: Per-rule dedicated `tcp_proxy` listeners for SSH/TCP egress rules. Each rule gets a sequential port starting from `ENVOY_TCP_PORT_BASE` (10001). Uses `STRICT_DNS` clusters for domain destinations (with Cloudflare dns_resolvers) and `STATIC` clusters for IP destinations.
 - Hardcoded domains defined in `config/domains.ts`, user rules additive via `egressPolicy` config
-- Warnings emitted for unsupported rule types (SSH, TCP, MITM inspection — Phase 2)
+- Warnings emitted for CIDR SSH/TCP destinations (not supported) and missing port on SSH/TCP rules
 
 ## Docker Container Conventions
 - Gateway containers run on `internal: true` network only — no direct internet access
@@ -72,6 +75,7 @@ The `node` user cannot modify iptables rules (requires `CAP_NET_ADMIN` which onl
 - Gateway has `init: true`, `restart: unless-stopped`
 - Gateway command: `openclaw gateway --bind lan --port <port>`
 - No `HTTP_PROXY`/`HTTPS_PROXY` env vars — iptables DNAT handles all routing transparently
+- `OPENCLAW_TCP_MAPPINGS` env var (optional): semicolon-delimited `dst:dstPort:envoyPort` entries for SSH/TCP egress. Set by the Gateway component when `tcpPortMappings` is non-empty. Processed by entrypoint.sh to create per-destination iptables DNAT rules.
 - Per-gateway Docker image: `openclaw-gateway-<profile>:<version>`
 
 ## Template Code Conventions
