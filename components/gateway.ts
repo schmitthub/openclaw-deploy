@@ -142,7 +142,7 @@ export class Gateway extends pulumi.ComponentResource {
           `NODE_EXTRA_CA_CERTS=${ENVOY_CA_CERT_PATH}`,
           ...(args.tcpPortMappings && args.tcpPortMappings.length > 0
             ? [
-                `OPENCLAW_TCP_MAPPINGS=${args.tcpPortMappings.map((m) => `${m.dst}:${m.dstPort}:${m.envoyPort}`).join(";")}`,
+                `OPENCLAW_TCP_MAPPINGS=${args.tcpPortMappings.map((m) => `${m.dst}|${m.dstPort}|${m.envoyPort}`).join(";")}`,
               ]
             : []),
           ...Object.entries(args.env ?? {}).map(([k, v]) => `${k}=${v}`),

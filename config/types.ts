@@ -6,7 +6,7 @@ export interface PathRule {
 }
 
 export interface EgressRule {
-  dst: string; // domain "x.com" | IP "140.82.121.4" | CIDR "10.0.0.0/24"
+  dst: string; // domain "x.com" | IPv4 "140.82.121.4" | IPv6 "2001:db8::1" | CIDR "10.0.0.0/24"
   proto: "tls" | "ssh" | "tcp"; // ssh/tcp reserved for future port-based rules
   port?: number; // required for ssh/ftp/tcp, optional for tls/http (defaults 443/80)
   action: "allow" | "deny";

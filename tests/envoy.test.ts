@@ -326,16 +326,17 @@ describe("renderEnvoyConfig", () => {
       expect(yaml).toContain("tcp_db_example_com_5432");
     });
 
-    it("uses STRICT_DNS cluster for domain destinations", () => {
+    it("uses STRICT_DNS cluster with AUTO lookup for domain destinations", () => {
       const userRules: EgressRule[] = [
         { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
       ];
       const { yaml } = renderEnvoyConfig(userRules);
       expect(yaml).toContain("type: STRICT_DNS");
+      expect(yaml).toContain("dns_lookup_family: AUTO");
       expect(yaml).toContain(`address: "${CLOUDFLARE_DNS_PRIMARY}"`);
     });
 
-    it("uses STATIC cluster for IP destinations", () => {
+    it("uses STATIC cluster for IPv4 destinations", () => {
       const userRules: EgressRule[] = [
         { dst: "140.82.121.4", proto: "ssh", port: 22, action: "allow" },
       ];
@@ -347,6 +348,33 @@ describe("renderEnvoyConfig", () => {
       const tcpCluster = clustersSection.substring(tcpClusterIdx);
       expect(tcpCluster).toContain("type: STATIC");
       expect(tcpCluster).toContain('"140.82.121.4"');
+    });
+
+    it("uses STATIC cluster for IPv6 destinations", () => {
+      const userRules: EgressRule[] = [
+        { dst: "2001:db8::1", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      const clustersSection = yaml.split(/\n {2}clusters:\n/)[1]!;
+      const safeName = "tcp_ssh_2001_db8__1_22";
+      const tcpClusterIdx = clustersSection.indexOf(safeName);
+      expect(tcpClusterIdx).toBeGreaterThan(-1);
+      const tcpCluster = clustersSection.substring(tcpClusterIdx);
+      expect(tcpCluster).toContain("type: STATIC");
+      expect(tcpCluster).toContain('"2001:db8::1"');
+    });
+
+    it("emits iptables limitation warning for IPv6 SSH/TCP destinations", () => {
+      const userRules: EgressRule[] = [
+        { dst: "2001:db8::1", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { warnings, tcpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("IPv6");
+      expect(warnings[0]).toContain("2001:db8::1");
+      expect(warnings[0]).toContain("iptables routing is IPv4-only");
+      // Mapping is still created (Envoy can reach IPv6)
+      expect(tcpPortMappings).toHaveLength(1);
     });
 
     it("STATIC cluster for IP has no dns_resolvers", () => {

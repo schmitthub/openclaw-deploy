@@ -329,20 +329,28 @@ describe("renderEntrypoint", () => {
       expect(ep).toContain("OPENCLAW_TCP_MAPPINGS");
     });
 
-    it("parses semicolon-delimited entries", () => {
+    it("parses semicolon-delimited entries with pipe field separator", () => {
       expect(ep).toContain("IFS=';'");
       expect(ep).toContain("TCP_ENTRIES");
+      // Fields within each entry use | (not : which conflicts with IPv6)
+      expect(ep).toContain("IFS='|'");
+      expect(ep).toContain("dst|dstPort|envoyPort");
     });
 
     it("resolves domains via getent ahostsv4", () => {
       expect(ep).toContain("getent ahostsv4");
     });
 
-    it("handles IP destinations without resolution", () => {
-      // Should check if DST is already an IP and skip resolution
+    it("handles IPv4 destinations without resolution", () => {
       expect(ep).toContain("grep -qE");
       expect(ep).toMatch(/\[0-9\]\{1,3\}/);
       expect(ep).toContain('RESOLVED_IP="$DST"');
+    });
+
+    it("skips IPv6 destinations with warning (iptables is IPv4-only)", () => {
+      expect(ep).toContain("grep -q ':'");
+      expect(ep).toContain("IPv6 destination");
+      expect(ep).toContain("iptables routing is IPv4-only");
     });
 
     it("per-destination DNAT rules appear before catch-all", () => {

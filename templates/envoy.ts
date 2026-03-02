@@ -107,7 +107,7 @@ ${routeEntries}
               "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
               dns_cache_config:
                 name: mitm_forward_proxy_cache
-                dns_lookup_family: V4_PREFERRED
+                dns_lookup_family: AUTO
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router`;
@@ -126,7 +126,7 @@ function renderMitmCluster(): string {
         "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
         dns_cache_config:
           name: mitm_forward_proxy_cache
-          dns_lookup_family: V4_PREFERRED
+          dns_lookup_family: AUTO
     transport_socket:
       name: envoy.transport_sockets.tls
       typed_config:
@@ -139,7 +139,7 @@ function renderMitmCluster(): string {
 
 /** Render a dedicated TCP proxy listener for a single SSH/TCP egress rule. */
 function renderTcpListener(mapping: TcpPortMapping): string {
-  const safeName = `${mapping.proto}_${mapping.dst.replace(/\./g, "_")}_${mapping.dstPort}`;
+  const safeName = `${mapping.proto}_${mapping.dst.replace(/[.:]/g, "_")}_${mapping.dstPort}`;
   const clusterName = `tcp_${safeName}`;
   return `
   # ${mapping.proto.toUpperCase()} egress: ${mapping.dst}:${mapping.dstPort} → :${mapping.envoyPort}
@@ -159,9 +159,11 @@ function renderTcpListener(mapping: TcpPortMapping): string {
 
 /** Render a STRICT_DNS or STATIC cluster for a single SSH/TCP egress rule. */
 function renderTcpCluster(mapping: TcpPortMapping): string {
-  const safeName = `${mapping.proto}_${mapping.dst.replace(/\./g, "_")}_${mapping.dstPort}`;
+  const safeName = `${mapping.proto}_${mapping.dst.replace(/[.:]/g, "_")}_${mapping.dstPort}`;
   const clusterName = `tcp_${safeName}`;
-  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(mapping.dst);
+  const isIpv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(mapping.dst);
+  const isIpv6 = mapping.dst.includes(":");
+  const isIp = isIpv4 || isIpv6;
 
   if (isIp) {
     return `
@@ -183,7 +185,7 @@ function renderTcpCluster(mapping: TcpPortMapping): string {
   - name: ${clusterName}
     type: STRICT_DNS
     connect_timeout: 5s
-    dns_lookup_family: V4_PREFERRED
+    dns_lookup_family: AUTO
     typed_dns_resolver_config:
       name: envoy.network.dns_resolver.cares
       typed_config:
@@ -264,6 +266,11 @@ export function renderEnvoyConfig(
           );
           break;
         }
+        if (rule.dst.includes(":")) {
+          warnings.push(
+            `IPv6 destination "${rule.dst}" for ${rule.proto.toUpperCase()} rule — Envoy listener created but gateway iptables routing is IPv4-only (traffic may not route until dual-stack internal network is supported)`,
+          );
+        }
         const envoyPort = ENVOY_TCP_PORT_BASE + tcpMappings.length;
         tcpMappings.push({
           dst: rule.dst,
@@ -323,7 +330,7 @@ ${domainLines}
           port_value: 443
           dns_cache_config:
             name: dynamic_forward_proxy_cache
-            dns_lookup_family: V4_PREFERRED
+            dns_lookup_family: AUTO
       - name: envoy.filters.network.tcp_proxy
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
@@ -378,7 +385,7 @@ ${tcpListenerSection}
         "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
         dns_cache_config:
           name: dynamic_forward_proxy_cache
-          dns_lookup_family: V4_PREFERRED
+          dns_lookup_family: AUTO
 ${mitmClusterSection}
 ${tcpClusterSection}
   - name: deny_cluster
