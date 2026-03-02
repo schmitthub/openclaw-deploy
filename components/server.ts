@@ -1,13 +1,14 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as hcloud from "@pulumi/hcloud";
+import * as digitalocean from "@pulumi/digitalocean";
 import { VpsProvider } from "../config";
 
 export interface ServerArgs {
   provider: VpsProvider;
-  serverType: pulumi.Input<string>; // e.g. "cx22", "cx32", "cax21"
-  region: pulumi.Input<string>; // e.g. "fsn1", "nbg1"
-  sshKeyId: pulumi.Input<string>; // Hetzner SSH key ID or name
-  image?: pulumi.Input<string>; // defaults to "ubuntu-24.04"
+  serverType: pulumi.Input<string>; // e.g. "cx22" (Hetzner), "s-1vcpu-1gb" (DO)
+  region: pulumi.Input<string>; // e.g. "fsn1" (Hetzner), "nyc1" (DO)
+  sshKeyId: pulumi.Input<string>; // Provider-specific SSH key ID or fingerprint
+  image?: pulumi.Input<string>; // e.g. "ubuntu-24.04" (Hetzner), "ubuntu-24-04-x64" (DO)
 }
 
 export class Server extends pulumi.ComponentResource {
@@ -56,11 +57,37 @@ export class Server extends pulumi.ComponentResource {
         break;
       }
 
-      case "digitalocean":
-        // Phase 2: DigitalOcean support
-        throw new Error(
-          `Provider "digitalocean" is not yet supported. Only "hetzner" is available.`,
+      case "digitalocean": {
+        const droplet = new digitalocean.Droplet(
+          `${name}-droplet`,
+          {
+            name,
+            size: args.serverType, // e.g. "s-1vcpu-1gb", "s-2vcpu-2gb"
+            region: args.region, // e.g. "nyc1", "sfo3"
+            image: args.image ?? "ubuntu-24-04-x64",
+            sshKeys: [args.sshKeyId],
+          },
+          { parent: this },
         );
+
+        this.ipAddress = droplet.ipv4Address;
+
+        // DO arm64 droplet slugs end in "-arm" (e.g. "s-2vcpu-4gb-arm")
+        this.arch = pulumi
+          .output(args.serverType)
+          .apply((st) => (st.endsWith("-arm") ? "arm64" : "amd64"));
+
+        this.connection = droplet.ipv4Address.apply((ip) => ({
+          host: ip,
+          user: "root",
+        }));
+
+        this.dockerHost = droplet.ipv4Address.apply(
+          (ip) => `ssh://root@${ip}`,
+        );
+
+        break;
+      }
 
       case "oracle":
         // Phase 2: Oracle Cloud support

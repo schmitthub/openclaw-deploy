@@ -19,6 +19,11 @@ beforeAll(() => {
           state.ipv6Address = state.ipv6Address ?? "2001:db8::1";
         }
 
+        // digitalocean.Droplet — provide a fake IPv4 address
+        if (args.type === "digitalocean:index/droplet:Droplet") {
+          state.ipv4Address = state.ipv4Address ?? "198.51.100.20";
+        }
+
         // command.remote.Command — provide stdout/stderr
         if (args.type === "command:remote:Command") {
           state.stdout = state.stdout ?? "mock-stdout";
@@ -98,17 +103,50 @@ describe("Server component", () => {
     expect(server).toBeDefined();
   });
 
-  it("throws for digitalocean provider (Phase 2)", async () => {
+  it("creates a DigitalOcean droplet with expected outputs", async () => {
     const { Server } = await import("../components/server");
-    expect(
-      () =>
-        new Server("test-do", {
-          provider: "digitalocean",
-          serverType: "s-1vcpu-1gb",
-          region: "nyc1",
-          sshKeyId: "abc",
-        }),
-    ).toThrow(/digitalocean.*not yet supported/i);
+    const server = new Server("test-do", {
+      provider: "digitalocean",
+      serverType: "s-1vcpu-1gb",
+      region: "nyc1",
+      sshKeyId: "ab:cd:ef:12:34",
+    });
+
+    const ip = await promiseOf(server.ipAddress);
+    expect(ip).toBe("198.51.100.20");
+
+    const conn = await promiseOf(server.connection);
+    expect(conn.host).toBe("198.51.100.20");
+    expect(conn.user).toBe("root");
+
+    const dockerHost = await promiseOf(server.dockerHost);
+    expect(dockerHost).toBe("ssh://root@198.51.100.20");
+  });
+
+  it("detects amd64 architecture for DigitalOcean droplets", async () => {
+    const { Server } = await import("../components/server");
+    const server = new Server("test-do-arch", {
+      provider: "digitalocean",
+      serverType: "s-2vcpu-2gb",
+      region: "sfo3",
+      sshKeyId: "ab:cd:ef:12:34",
+    });
+
+    const arch = await promiseOf(server.arch);
+    expect(arch).toBe("amd64");
+  });
+
+  it("detects arm64 architecture for DigitalOcean ARM droplets", async () => {
+    const { Server } = await import("../components/server");
+    const server = new Server("test-do-arm", {
+      provider: "digitalocean",
+      serverType: "s-2vcpu-4gb-arm",
+      region: "nyc1",
+      sshKeyId: "ab:cd:ef:12:34",
+    });
+
+    const arch = await promiseOf(server.arch);
+    expect(arch).toBe("arm64");
   });
 
   it("throws for oracle provider (Phase 2)", async () => {
