@@ -20,15 +20,3 @@ jobs:
     name: Security
     uses: ./.github/workflows/security.yml
     secrets: inherit
-
-  lint:
-    name: Lint
-    uses: ./.github/workflows/lint.yml
-
-  test:
-    name: Test
-    uses: ./.github/workflows/test.yml
-
-  licenses:
-    name: Licenses
-    uses: ./.github/workflows/licenses.yml

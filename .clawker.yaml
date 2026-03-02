@@ -3,54 +3,37 @@
 # Learn more about Clawker at https://clawker.dev; https://docs.clawker.dev; https://github.com/schmitthub/clawker
 
 build:
-  image: "buildpack-deps:bookworm-scm"
+  image: "node:bookworm-slim"
+
   packages:
-    - git
-    - curl
-    - ripgrep
-    - less
-    - procps
-    - sudo
-    - fzf
-    - zsh
-    - man-db
-    - unzip
-    - gnupg2
-    - iptables
-    - ipset
-    - iproute2
-    - dnsutils
-    - aggregate
-    - jq
-    - nano
-    - vim
-    - wget
-    - curl
-    - gh
-    - locales
-    - locales-all
-    - iputils-ping
-    - shellcheck
-    - nodejs
-    - npm
-  instructions:
-    root_run:
-      - cmd: |
-          ARCH=$(dpkg --print-architecture) && \
-            curl -fsSL "https://golang.org/dl/go1.26.0.linux-${ARCH}.tar.gz" | tar -C /usr/local -xzf - \
-            && echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile.d/go.sh
-    user_run:
-      - cmd: curl -LsSf https://astral.sh/uv/install.sh | sh
-      - cmd: uv tool install pre-commit --with pre-commit-uv
-      - cmd: /usr/local/go/bin/go install golang.org/x/tools/gopls@latest
-      - cmd: /usr/local/go/bin/go install gotest.tools/gotestsum@latest
-      - cmd: /usr/local/go/bin/go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-      - cmd: /usr/local/go/bin/go install golang.org/x/vuln/cmd/govulncheck@latest
-      - cmd: /usr/local/go/bin/go install golang.org/x/tools/cmd/goimports@latest
-      - cmd: uv tool install semgrep
+    - ca-certificates
+    - openssh-client
+
   inject:
     after_user_switch:
-        - ENV PATH="$PATH:/usr/local/go/bin:/home/${USERNAME}/go/bin"
+      - ENV NVM_DIR="/home/claude/.nvm"
+      - ENV NODE_VERSION="24"
+      - ENV PATH="/home/claude/.pulumi/bin:$PATH"
+
+  instructions:
+    # Install nvm, Node.js, and pnpm as the claude user
+    user_run:
+      - cmd: curl -fsSL https://get.pulumi.com | sh
+      - cmd: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - cmd: |
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+      - cmd: |
+          . "$NVM_DIR/nvm.sh" && \
+          nvm install $NODE_VERSION && \
+          nvm use $NODE_VERSION && \
+          nvm alias default $NODE_VERSION
+      - cmd: |
+          . "$NVM_DIR/nvm.sh" && \
+          npm install -g pnpm typescript
+      - cmd: |
+          echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc && \
+          echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> ~/.bashrc && \
+          echo '[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"' >> ~/.bashrc
 
 agent:
   from_env:
@@ -76,33 +59,16 @@ security:
       - name: github
       - name: google  # Required for Go modules (proxy.golang.org uses GCS)
     add_domains:
-      - charm.land
-      - code.gitea.io
-      - golang.org
-      - proxy.golang.org
-      - sum.golang.org
-      - gocloud.dev
-      - gopkg.in
-      - software.sslmate.com
-      - cloud.google.com
-      - sigs.k8s.io
-      - google.golang.org
-      - storage.googleapis.com
-      - go.opentelemetry.io
-      - go.uber.org
-      - lukechampine.com
-      - go.yaml.in
-      - cel.dev
-      - files.pythonhosted.org
-      - code.claude.com
+      - registry.yarnpkg.com
       - mcp.deepwiki.com
       - mcp.context7.com
-      - pypi.org
-      - semgrep.dev
-      - registry.npmjs.org
       - openclaw.ai
       - astral.sh
+      - pypi.org
       - docs.openclaw.ai
+      - files.pythonhosted.org
+      - get.pulumi.com
+      - www.pulumi.com
   docker_socket: true
   git_credentials:
     forward_https: true
@@ -111,7 +77,15 @@ security:
     copy_git_config: true
 
 loop:
-  max_loops: 30
-  timeout_minutes: 10
-  stagnation_threshold: 3
-  max_consecutive_test_loops: 3
+  max_loops: 50                   # Maximum loops before stopping (default: 50)
+  stagnation_threshold: 3         # Loops without progress before circuit trips (default: 3)
+  timeout_minutes: 15             # Per-loop timeout in minutes (default: 15)
+  calls_per_hour: 100             # Rate limit: max calls per hour, 0 to disable (default: 100)
+  completion_threshold: 2         # Completion indicators required for strict mode (default: 2)
+  session_expiration_hours: 24    # Session TTL, auto-reset if older (default: 24)
+  same_error_threshold: 5         # Same error repetitions before circuit trips (default: 5)
+  output_decline_threshold: 70    # Output decline percentage that triggers trip (default: 70)
+  max_consecutive_test_loops: 3   # Test-only loops before circuit trips (default: 3)
+  loop_delay_seconds: 3           # Seconds to wait between loop iterations (default: 3)
+  safety_completion_threshold: 5  # Force exit after N loops with completion indicators (default: 5)
+  skip_permissions: true         # Pass --dangerously-skip-permissions to claude (default: false)

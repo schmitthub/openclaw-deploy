@@ -1,20 +1,26 @@
 # Roadmap
 
+## In Progress
+
+### IaC Migration (openclaw-docker → openclaw-deploy)
+- **Branch:** `refator/iac`
+- Pulumi TypeScript IaC for OpenClaw fleet deployment
+- Tasks 1-10 complete, Task 11 (Testing infrastructure & CI) pending
+- See Serena memory `initiative-iac-migration` for full task tracker
+
 ## Planned
 
-### Keychain support for secret storage (#2)
-- OS keychain integration (macOS Keychain, Linux libsecret, Windows Credential Manager)
-- Replace plaintext token storage in `.env.openclaw`
-- Fallback to plaintext when no keychain available (CI, Docker-only hosts)
-- Go libraries: `zalando/go-keyring` or `99designs/keyring`
+### Phase 2: Multi-provider support
+- DigitalOcean provider in `components/server.ts`
+- Oracle Cloud provider in `components/server.ts`
+- Provider-specific defaults and region validation
 
+### Phase 2: Advanced egress policy
+- MITM TLS inspection for path-level filtering (structure in `EgressRule.inspect` + `pathRules`)
+- SSH egress rules via DNS snooping
+- TCP egress rules via DNS snooping
 
-### Let's Encrypt TLS cert support
-- Flag like `--tls-domain example.com` to obtain a real TLS cert via certbot/acme.sh
-- Replaces self-signed `nginx-cert.pem`/`nginx-key.pem` with a trusted cert
-- Fail fast if certbot not installed on host
-- Open questions:
-  - DNS challenge vs HTTP challenge (HTTP needs port 80 open + DNS already pointed)
-  - Renewal strategy: cron/timer on host vs compose sidecar container
-  - Runs at `setup.sh` runtime (not generation time) since it needs the actual host
-  - DNS challenge needs provider API credentials
+### Phase 2: CI/CD
+- Pre-commit hooks for TypeScript linting and type-checking
+- Pulumi preview in CI for PR validation
+- Expanded Pulumi unit tests with mocked components

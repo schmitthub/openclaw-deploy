@@ -1,0 +1,6 @@
+name: openclaw-deploy
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: Pulumi IaC for deploying OpenClaw fleets with protocol-aware egress security

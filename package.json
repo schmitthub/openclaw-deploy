@@ -1,0 +1,30 @@
+{
+  "name": "openclaw-deploy",
+  "version": "0.1.0",
+  "description": "Pulumi IaC for deploying OpenClaw fleets with protocol-aware egress security",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/schmitthub/openclaw-docker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@pulumi/command": "^1.2.0",
+    "@pulumi/docker": "^4.11.0",
+    "@pulumi/hcloud": "^1.32.1",
+    "@pulumi/pulumi": "^3.224.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

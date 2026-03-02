@@ -1,37 +1,39 @@
-# General
+# OS
 .DS_Store
 __MACOSX/
 .AppleDouble
 .LSOverride
-Icon[
-]
-
-# Thumbnails
 ._*
+Thumbs.db
 
-# Files that might appear in the root of a volume
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-
-# Directories potentially created on remote AFP share
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
-
-# Local/generated helper files
+# Local/generated
 .env
 .envrc
 .cache/
 bin/
-openclawdockerfiles/
 openclaw-deploy/
 openclaw-docker
 
+# Claude Code
 .claude/settings.local.json
+
+# Node
+node_modules/
+*.log
+npm-debug.log*
+.npm
+
+# TypeScript build
+dist/
+*.tsbuildinfo
+
+# Pulumi stack configs (contain secrets)
+Pulumi.*.yaml
+
+# Test coverage
+coverage/
+*.lcov
+
+# dotenv
+.env.*
+!.env.example

@@ -1,0 +1,27 @@
+// Docker network constants
+export const INTERNAL_NETWORK_SUBNET = "172.28.0.0/24";
+export const ENVOY_STATIC_IP = "172.28.0.2";
+export const INTERNAL_NETWORK_NAME = "openclaw-internal";
+export const EGRESS_NETWORK_NAME = "openclaw-egress";
+
+// Envoy
+export const ENVOY_IMAGE = "envoyproxy/envoy:v1.33-latest";
+export const ENVOY_EGRESS_PORT = 10000;
+export const ENVOY_DNS_PORT = 53;
+export const CLOUDFLARE_DNS_PRIMARY = "1.1.1.2";
+export const CLOUDFLARE_DNS_SECONDARY = "1.0.0.2";
+export const ENVOY_CONFIG_HOST_DIR = "/opt/openclaw-deploy/envoy";
+
+// Gateway defaults
+export const DEFAULT_GATEWAY_PORT = 18789;
+export const DEFAULT_BRIDGE_PORT = 18790;
+export const DEFAULT_OPENCLAW_CONFIG_DIR = "/home/node/.openclaw";
+export const DEFAULT_OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
+export const DEFAULT_GATEWAY_BIND = "lan";
+export const DOCKER_BASE_IMAGE = "node:22-bookworm";
+
+// Core apt packages (always installed)
+export const CORE_APT_PACKAGES = ["iptables", "iproute2", "gosu", "libsecret-tools"];
+
+// Tailscale Funnel allowed ports
+export const TAILSCALE_FUNNEL_PORTS = [443, 8443, 10000];
