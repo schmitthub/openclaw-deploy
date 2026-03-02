@@ -1,143 +1,83 @@
 ---
-globs: ["**/Dockerfile*", "**/compose*.yaml", "**/.env*", "**/*.sh", "internal/render/**/*.go"]
+globs: ["**/Dockerfile*", "**/*.sh", "templates/dockerfile.ts", "templates/entrypoint.ts", "templates/envoy.ts"]
 ---
 
 # Docker & Shell Artifact Rules
 
-## Generated Artifacts
-The CLI generates files to `<output>/` (default `./openclaw-deploy`), organized by service:
+## Generated Artifacts (rendered by templates/)
 
-**Root files:**
-| File | Permissions | Purpose |
-|------|-------------|---------|
-| `compose.yaml` | 0644 | 2 services: envoy, openclaw-gateway |
-| `.env.openclaw` | 0644 | Runtime env vars (token, ports, bind settings) |
-| `setup.sh` | 0755 | Build, onboard (skippable via `--skip-onboarding`), configure (via gw_config/`./openclaw` wrapper), pair CLI, compose up |
-| `openclaw` | 0755 | CLI wrapper (`docker run`, remote client via `wss://envoy:443`) |
-| `manifest.json` | 0644 | Resolved version metadata |
+Templates are pure TypeScript functions that return strings. They are called at Pulumi plan time
+and uploaded to remote hosts via `command.remote.Command` (base64-encoded).
 
-**`compose/openclaw/`:**
-| File | Permissions | Purpose |
-|------|-------------|---------|
-| `Dockerfile` | 0644 | `node:22-bookworm` + `iptables` + `iproute2` + `gosu` + `libsecret-tools` + `pnpm` + `bun` + `brew` |
-| `entrypoint.sh` | 0755 | Root-owned: sets iptables rules, then drops to `node` via `gosu` |
+| Template | Output | Purpose |
+|----------|--------|---------|
+| `templates/dockerfile.ts` | `Dockerfile` | `node:22-bookworm` + iptables + iproute2 + gosu + libsecret-tools + pnpm + bun + brew + uv + openclaw |
+| `templates/entrypoint.ts` | `entrypoint.sh` | Root-owned: iptables DNAT + FILTER → gosu node |
+| `templates/envoy.ts` | `envoy.yaml` | Egress-only: transparent TLS proxy (SNI whitelist) + DNS forwarder |
 
-**`compose/envoy/`:**
-| File | Permissions | Purpose |
-|------|-------------|---------|
-| `envoy.yaml` | 0644 | Envoy config: ingress (TLS+reverse proxy+XFF) + egress (transparent TLS proxy+SNI whitelist) |
-| `server-cert.pem` | 0644 | Self-signed TLS cert for Envoy ingress listener |
-| `server-key.pem` | 0600 | TLS key for Envoy ingress listener |
+Artifacts are written to the remote host at `/opt/openclaw-deploy/build/<profile>/` (Dockerfile, entrypoint.sh)
+and `/opt/openclaw-deploy/envoy/envoy.yaml` (Envoy config).
 
 ## Dockerfile Conventions
 - Base: `node:22-bookworm` (matches official OpenClaw Docker pattern)
 - Always installs `iptables`, `iproute2`, `gosu`, and `libsecret-tools` (egress security + keychain)
-- `pnpm` installed via `npm install -g pnpm`; `PNPM_HOME=/home/node/.local/share/pnpm` for global bin dir (accessible to node user at runtime)
+- `pnpm` installed via `npm install -g pnpm`; `PNPM_HOME=/home/node/.local/share/pnpm` for global bin dir
 - `bun` installed via `curl -fsSL https://bun.sh/install | bash` then **copied** to `/usr/local/bin/bun` (symlinks through `/root/` fail — mode 0700)
+- `uv` (Python package manager) installed via official install script as node user
 - Homebrew (Linuxbrew) installed via official install script as `node` user; available via PATH
 - OpenClaw installed via `npm install -g openclaw@<version>`
 - `SHARP_IGNORE_GLOBAL_LIBVIPS=1` set during npm install
+- `NODE_OPTIONS=--max-old-space-size=2048` during npm install (prevents OOM on low-memory hosts)
 - CLI symlink: `ln -sf "$(npm root -g)/openclaw/dist/entry.js" /usr/local/bin/openclaw`
 - Optional `OPENCLAW_INSTALL_BROWSER` ARG: bakes Playwright + Chromium + Xvfb (~300MB)
 - `COPY entrypoint.sh /usr/local/bin/entrypoint.sh` — root-owned, 0755
 - `ENTRYPOINT ["entrypoint.sh"]` runs as root to set iptables, then drops to `node`
-- `CMD ["openclaw", "gateway", "--allow-unconfigured"]` (overridden by compose `command`)
-- `OPENCLAW_DOCKER_APT_PACKAGES` ARG for optional additional packages
+- `CMD ["openclaw", "gateway", "--allow-unconfigured"]` (overridden by container command)
+- `OPENCLAW_DOCKER_APT_PACKAGES` ARG for optional additional packages via `packages` config
+- `OPENCLAW_PREFER_PNPM=1` env var (Bun may fail on ARM/Synology)
 - No dev tools (zsh, git-delta, hadolint, fzf)
 
 ## Entrypoint Security Model
 The `entrypoint.sh` script enforces transparent egress isolation via iptables:
 1. Resolves Envoy's IP via `getent hosts envoy`
 2. Derives `INTERNAL_SUBNET` from Envoy's IP (strip last octet, append `.0/24`)
-3. Adds default route via Envoy (`ip route add default via $ENVOY_IP`) — required because `internal: true` networks have no gateway, so the kernel rejects connections to external IPs with "Network is unreachable" before iptables can DNAT them
-4. Flushes existing rules, then restores Docker's `DOCKER_OUTPUT` chain jump (Docker DNS uses this chain to DNAT port 53 to a high port — without it, all DNS fails)
-5. NAT table: skip DNAT for loopback (`-o lo`) and internal subnet, then DNAT all other outbound TCP to Envoy's transparent proxy listener
+3. Adds default route via Envoy (`ip route add default via $ENVOY_IP`) — required because `internal: true` networks have no gateway
+4. Flushes existing rules, then restores Docker's `DOCKER_OUTPUT` chain jump (Docker DNS depends on it)
+5. NAT table: skip DNAT for loopback (`-o lo`) and internal subnet, then DNAT all other outbound TCP to Envoy's transparent proxy listener (:10000)
 6. FILTER table: `OUTPUT DROP` default policy. Allows: loopback, Docker DNS (127.0.0.11:53 UDP), established/related, internal subnet
 7. Drops to `node` user via `exec gosu node "$@"`
 
 Apps are unaware of the proxy — they connect normally and iptables rewrites the destination.
 The `node` user cannot modify iptables rules (requires `CAP_NET_ADMIN` which only root has).
-No `HTTP_PROXY`/`HTTPS_PROXY` env vars are needed — iptables DNAT handles all routing transparently.
 
-## Compose Conventions
-- **2 services:** `envoy`, `openclaw-gateway`
-- Envoy (`envoyproxy/envoy:v1.33-latest`) is the sole ingress/egress proxy and DNS forwarder
-- Envoy has static IP `172.28.0.2` on `openclaw-internal` (IPAM subnet `172.28.0.0/24`)
-- Envoy runs as default non-root `envoy` user with `sysctls: [net.ipv4.ip_unprivileged_port_start=53]` for port 53 binding
-- Envoy publishes port 443 for ingress; egress listener on port 10000, DNS listener on port 53 UDP (internal only)
-- Gateway uses `dns: [172.28.0.2]` so Docker DNS forwards external queries to Envoy
-- Gateway builds from `compose/openclaw/` subdirectory
-- Gateway has explicit `command: ["openclaw", "gateway", "--bind", "lan", "--port", "18789"]` (ensures LAN binding for Docker network reachability)
-- Gateway uses `cap_add: [NET_ADMIN]` — required by root entrypoint for iptables + routing setup
-- Gateway has `init: true`, `restart: unless-stopped`, `HOME`/`TERM` env vars
-- Gateway has no published ports — only accessible via Envoy on internal network
-- CLI is **not** a compose service — runs as standalone `docker run --rm` on the `openclaw-egress` network, connecting to gateway through Envoy (`wss://envoy:443`) as a remote client with config bind-mounted from `data/cli-config/`. Uses `--entrypoint openclaw` (bypasses entrypoint.sh — no `CAP_NET_ADMIN`, not on internal network)
-- Envoy on both `openclaw-internal` (internal: true) and `openclaw-egress` networks
-- Gateway on `openclaw-internal` only — all egress routes through Envoy
-- No proxy env vars — iptables DNAT provides transparent egress routing
-- Env vars sourced from `.env.openclaw` via `env_file`
-
-## Envoy Configuration
-- **Ingress listener (:443)**: TLS termination, `use_remote_address: true`, `xff_num_trusted_hops: 0`, WebSocket upgrade, reverse proxy to gateway
+## Envoy Configuration (egress-only)
+- **No ingress listener** — Tailscale handles all ingress (Serve/Funnel)
 - **Egress listener (:10000)**: Transparent TLS proxy with SNI-based domain whitelist. All outbound TCP from gateway is DNAT'd here by iptables.
-- **DNS listener (:53 UDP)**: Forwards DNS queries to Cloudflare malware-blocking resolvers (1.1.1.2 / 1.0.0.2). Uses `envoy.filters.udp.dns_filter` with c-ares resolver. Required because Docker's embedded DNS cannot forward external queries on `internal: true` networks.
+- **DNS listener (:53 UDP)**: Forwards DNS queries to Cloudflare malware-blocking resolvers (1.1.1.2 / 1.0.0.2). Uses `envoy.filters.udp.dns_filter` with c-ares resolver.
 - TLS Inspector listener filter reads SNI from ClientHello without terminating TLS (no MITM)
 - Domain ACL via `filter_chain_match.server_names` matching TLS SNI
 - Non-TLS traffic (SSH, plain HTTP, raw TCP) is categorically denied — no SNI to inspect
-- **Hardcoded always-allowed (infrastructure):** `clawhub.com`, `registry.npmjs.org`
-- **Hardcoded always-allowed (AI providers):** `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `openrouter.ai`, `api.x.ai`
-- `--allowed-domains` is additive to all hardcoded domains
 - `sni_dynamic_forward_proxy` resolves whitelisted domains via DNS and forwards to port 443
 - `deny_cluster` (STATIC, no endpoints) immediately resets non-whitelisted connections
-- SNI spoofing is useless: Envoy resolves the domain independently, connecting to the real IP
+- Hardcoded domains defined in `config/domains.ts`, user rules additive via `egressPolicy` config
+- Warnings emitted for unsupported rule types (SSH, TCP, MITM inspection — Phase 2)
 
-## Shell Script Conventions
-- Shebang: `#!/usr/bin/env bash`
-- `set -euo pipefail`
-- Bash 3.2 compatible (macOS default)
-- Token gen: `openssl rand -hex 32` with python3 fallback
-- Token reuse: `read_config_gateway_token()` reads from existing `openclaw.json`
-- Gateway config: `gw_config` helper (`docker compose run --rm --no-deps openclaw-gateway openclaw "$@"`) — passes `openclaw` as CMD, entrypoint.sh runs first
-- CLI config: done via `./openclaw` wrapper (`docker run --rm --entrypoint openclaw` with bind mount to `data/cli-config/`)
-- No pre-generated `openclaw.json` — config created by `onboard` and subsequent `config set` calls
-- `--entrypoint openclaw` is ONLY used for standalone `docker run` (CLI wrapper) — never for `docker compose run` which must let entrypoint.sh execute
+## Docker Container Conventions
+- Gateway containers run on `internal: true` network only — no direct internet access
+- Envoy container on both internal and egress networks (sole bridge to internet)
+- Envoy has static IP `172.28.0.2` on internal network (IPAM subnet `172.28.0.0/24`)
+- Envoy runs as non-root `envoy` user with `sysctls: [net.ipv4.ip_unprivileged_port_start=53]`
+- Gateway uses `capabilities.adds: [NET_ADMIN]` — required by root entrypoint for iptables
+- Gateway uses `dns: [172.28.0.2]` so Docker DNS forwards external queries to Envoy
+- Gateway has `init: true`, `restart: unless-stopped`
+- Gateway command: `openclaw gateway --bind lan --port <port>`
+- No `HTTP_PROXY`/`HTTPS_PROXY` env vars — iptables DNAT handles all routing transparently
+- Per-gateway Docker image: `openclaw-gateway-<profile>:<version>`
 
-## Setup Flow (setup.sh)
-Supports `--skip-onboarding` flag to reuse existing gateway config.
-1. Create host dirs (`data/config/`, `data/workspace/`, `data/config/identity/`)
-2. Generate or reuse gateway token
-3. Write runtime values to `.env.openclaw` via `upsert_env`
-4. `docker compose build`
-5. `docker compose run --rm openclaw-gateway openclaw onboard --no-install-daemon` (interactive, skipped with `--skip-onboarding`)
-6. `gw_config config set gateway.mode local` (safety net — required for gateway to start)
-7. `gw_config config set gateway.auth.mode token` + `gw_config config set gateway.auth.token <token>`
-8. `gw_config config set gateway.trustedProxies [Docker CIDRs]`
-9. `ensure_control_ui_allowed_origins` (idempotent, via `gw_config`)
-10. `gw_config config set discovery.mdns.mode off`
-11. CLI remote config via `./openclaw` wrapper: `gateway.mode remote`, `gateway.remote.url wss://envoy:443`, `gateway.remote.transport direct`, `gateway.remote.token`
-12. `docker compose up -d`, wait for gateway
-13. Pair CLI device: `./openclaw devices list` (triggers pairing) + `devices approve --latest`
-
-## Generation Code
-Generation lives in `internal/render/render.go` and `internal/render/ca.go`:
-- `Generate(opts)` — orchestrates all artifact writes
-- `dockerfileFor(opts)` — Dockerfile content via `fmt.Sprintf`
-- `entrypointContent()` — entrypoint.sh with iptables + gosu
-- `composeFileContent(opts)` — compose YAML as string-joined lines
-- `openClawEnvFileContent(opts)` — env file via `fmt.Sprintf`
-- `setupScriptContent(opts)` — setup.sh via `fmt.Sprintf`
-- `envoyConfigContent(opts)` — envoy.yaml with ingress + egress listeners
-- `generateTLSCert(opts)` — self-signed TLS cert generation (in `ca.go`, preserves existing across re-runs)
-
-## Validation
-```bash
-# Generate artifacts
-go run . generate --openclaw-version latest --output ./openclaw-deploy --dangerous-inline
-
-# Validate compose
-docker compose -f ./openclaw-deploy/compose.yaml config
-
-# Check setup.sh and entrypoint.sh are executable
-test -x ./openclaw-deploy/setup.sh
-test -x ./openclaw-deploy/compose/openclaw/entrypoint.sh
-```
+## Template Code Conventions
+- Templates live in `templates/` and are **pure functions** returning strings
+- No side effects, no I/O, no Pulumi dependencies
+- `renderDockerfile(opts)` — parameterized by version, packages, installBrowser, ports
+- `renderEntrypoint()` — static content (no parameters)
+- `renderEnvoyConfig(userRules)` — returns `{ yaml, warnings }`, merges with hardcoded domains
+- All constants imported from `config/defaults.ts`
