@@ -13,6 +13,7 @@ build:
     after_user_switch:
       - ENV NVM_DIR="/home/claude/.nvm"
       - ENV NODE_VERSION="24"
+      - ENV PATH="/home/claude/.pulumi/bin:$PATH"
 
   instructions:
     # Install nvm, Node.js, and pnpm as the claude user
