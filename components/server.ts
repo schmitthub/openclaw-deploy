@@ -61,9 +61,7 @@ export class Server extends pulumi.ComponentResource {
           user: "root",
         }));
 
-        this.dockerHost = server.ipv4Address.apply(
-          (ip) => `ssh://root@${ip}`,
-        );
+        this.dockerHost = server.ipv4Address.apply((ip) => `ssh://root@${ip}`);
 
         break;
       }
@@ -93,9 +91,7 @@ export class Server extends pulumi.ComponentResource {
           user: "root",
         }));
 
-        this.dockerHost = droplet.ipv4Address.apply(
-          (ip) => `ssh://root@${ip}`,
-        );
+        this.dockerHost = droplet.ipv4Address.apply((ip) => `ssh://root@${ip}`);
 
         break;
       }
@@ -107,9 +103,7 @@ export class Server extends pulumi.ComponentResource {
           );
         }
         if (!args.subnetId) {
-          throw new Error(
-            'Oracle provider requires "subnetId" in ServerArgs.',
-          );
+          throw new Error('Oracle provider requires "subnetId" in ServerArgs.');
         }
         if (!args.image) {
           throw new Error(
@@ -165,9 +159,7 @@ export class Server extends pulumi.ComponentResource {
           })
           .apply((att) => {
             if (att.vnicAttachments.length === 0) {
-              throw new Error(
-                "No VNIC attachments found for OCI instance.",
-              );
+              throw new Error("No VNIC attachments found for OCI instance.");
             }
             return oci.core.getVnic({
               vnicId: att.vnicAttachments[0].vnicId,

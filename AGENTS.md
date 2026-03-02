@@ -5,6 +5,7 @@
 This repository is a **Pulumi TypeScript IaC** program (`openclaw-deploy`) that provisions and manages OpenClaw fleet deployments on remote VPS hosts with protocol-aware egress security.
 
 Primary goals:
+
 - Provision VPS infrastructure (Hetzner phase 1; DigitalOcean, Oracle planned).
 - Install Docker + Tailscale on bare hosts via remote commands.
 - Deploy OpenClaw gateway containers with transparent egress isolation via Envoy proxy.
@@ -70,27 +71,27 @@ Gateway(s) (1+ OpenClaw instances per server)
   ↓ optional Tailscale Serve/Funnel
 ```
 
-| Component | Type | Provider | Purpose |
-|-----------|------|----------|---------|
-| `Server` | `openclaw:infra:Server` | `@pulumi/hcloud` | Provision VPS, expose IP + connection |
-| `HostBootstrap` | `openclaw:infra:HostBootstrap` | `@pulumi/command` | Install Docker + Tailscale on bare host |
-| `EnvoyEgress` | `openclaw:infra:EnvoyEgress` | `@pulumi/docker` + `@pulumi/command` | Create internal/egress networks, deploy Envoy |
-| `Gateway` | `openclaw:app:Gateway` | `@pulumi/docker` + `@pulumi/command` | Build image, create container, configure gateway, optional Tailscale |
+| Component       | Type                           | Provider                             | Purpose                                                              |
+| --------------- | ------------------------------ | ------------------------------------ | -------------------------------------------------------------------- |
+| `Server`        | `openclaw:infra:Server`        | `@pulumi/hcloud`                     | Provision VPS, expose IP + connection                                |
+| `HostBootstrap` | `openclaw:infra:HostBootstrap` | `@pulumi/command`                    | Install Docker + Tailscale on bare host                              |
+| `EnvoyEgress`   | `openclaw:infra:EnvoyEgress`   | `@pulumi/docker` + `@pulumi/command` | Create internal/egress networks, deploy Envoy                        |
+| `Gateway`       | `openclaw:app:Gateway`         | `@pulumi/docker` + `@pulumi/command` | Build image, create container, configure gateway, optional Tailscale |
 
 ## Stack Configuration
 
 Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 
-| Key | Type | Required | Description |
-|-----|------|----------|-------------|
-| `provider` | `"hetzner"` | yes | VPS provider |
-| `serverType` | string | yes | Server type (e.g. `cx22`, `cax21`) |
-| `region` | string | yes | Datacenter region (e.g. `fsn1`) |
-| `sshKeyId` | string | yes | SSH key ID or name at provider |
-| `tailscaleAuthKey` | secret | yes | One-time Tailscale auth key |
-| `egressPolicy` | `EgressRule[]` | yes | User egress rules (additive to hardcoded) |
-| `gateways` | `GatewayConfig[]` | yes | Gateway profile definitions (1+) |
-| `gatewayToken-<profile>` | secret | per-gateway | Auth token for each gateway |
+| Key                      | Type              | Required    | Description                               |
+| ------------------------ | ----------------- | ----------- | ----------------------------------------- |
+| `provider`               | `"hetzner"`       | yes         | VPS provider                              |
+| `serverType`             | string            | yes         | Server type (e.g. `cx22`, `cax21`)        |
+| `region`                 | string            | yes         | Datacenter region (e.g. `fsn1`)           |
+| `sshKeyId`               | string            | yes         | SSH key ID or name at provider            |
+| `tailscaleAuthKey`       | secret            | yes         | One-time Tailscale auth key               |
+| `egressPolicy`           | `EgressRule[]`    | yes         | User egress rules (additive to hardcoded) |
+| `gateways`               | `GatewayConfig[]` | yes         | Gateway profile definitions (1+)          |
+| `gatewayToken-<profile>` | secret            | per-gateway | Auth token for each gateway               |
 
 ## Deployment Model
 
@@ -105,6 +106,7 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 ## Validation Expectations
 
 Before considering work complete, agents should:
+
 - Run `npx tsc --noEmit` to verify type safety.
 - Run `npx vitest run` to verify all tests pass.
 - For component/template changes, verify rendered output is correct.
@@ -175,6 +177,7 @@ No `HTTP_PROXY`/`HTTPS_PROXY` env vars are used. The transparent iptables DNAT c
 outbound TCP regardless of what tool, port, or protocol is used.
 
 **Key invariants (do not weaken):**
+
 - Gateway container must use `capabilities.adds: [NET_ADMIN]` (needed by root during init only).
 - Entrypoint must run as root, set iptables (NAT DNAT + FILTER DROP), then `exec gosu node "$@"` — never skip the drop.
 - Entrypoint must restore `DOCKER_OUTPUT` chain jump after flushing nat OUTPUT (Docker DNS depends on it).
@@ -198,13 +201,16 @@ outbound TCP regardless of what tool, port, or protocol is used.
 All domains below are hardcoded in `config/domains.ts` and always included. They cannot be removed.
 
 **Infrastructure:**
+
 - `clawhub.com`
 - `registry.npmjs.org`
 
 **AI providers:**
+
 - `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `openrouter.ai`, `api.x.ai`
 
 **Homebrew (Linuxbrew):**
+
 - `github.com`, `*.githubusercontent.com`, `ghcr.io`, `formulae.brew.sh`
 
 User-defined `egressPolicy` rules are **additive** to all hardcoded domains. Duplicates are deduplicated by `mergeEgressPolicy()`.

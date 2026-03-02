@@ -89,17 +89,18 @@ One Pulumi stack = one server. Each server runs N gateway instances sharing a si
 
 **Defense-in-depth (five layers):**
 
-| Layer | Mechanism | What it stops | Bypassable by `node` user? |
-|-------|-----------|---------------|---------------------------|
-| **1. Network isolation** | Docker `internal: true` network | No default route to internet — no IP to reach | No |
-| **2. iptables DNAT + FILTER** | Root-owned rules: SSH/TCP → specific Envoy ports, all other TCP → Envoy:10000 | Every TCP connection goes through Envoy | No (`CAP_NET_ADMIN` required, root only) |
-| **3. Envoy protocol-aware whitelist** | TLS: SNI inspection + domain whitelist. SSH/TCP: per-rule port-mapped listeners | Non-whitelisted HTTPS, non-mapped SSH/TCP, plain HTTP | No (Envoy resolves DNS independently) |
-| **4. Egress policy engine** | Typed `EgressRule[]` with domain/IP + protocol support (TLS, SSH, TCP) | Structured policy control with per-protocol handling | No (Envoy config, not in container) |
-| **5. Malware-blocking DNS** | Cloudflare 1.1.1.2 / 1.0.0.2 via Envoy DNS listener | Known malware, phishing, and C2 domains | No (Envoy resolves DNS, containers cannot override) |
+| Layer                                 | Mechanism                                                                       | What it stops                                         | Bypassable by `node` user?                          |
+| ------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------- |
+| **1. Network isolation**              | Docker `internal: true` network                                                 | No default route to internet — no IP to reach         | No                                                  |
+| **2. iptables DNAT + FILTER**         | Root-owned rules: SSH/TCP → specific Envoy ports, all other TCP → Envoy:10000   | Every TCP connection goes through Envoy               | No (`CAP_NET_ADMIN` required, root only)            |
+| **3. Envoy protocol-aware whitelist** | TLS: SNI inspection + domain whitelist. SSH/TCP: per-rule port-mapped listeners | Non-whitelisted HTTPS, non-mapped SSH/TCP, plain HTTP | No (Envoy resolves DNS independently)               |
+| **4. Egress policy engine**           | Typed `EgressRule[]` with domain/IP + protocol support (TLS, SSH, TCP)          | Structured policy control with per-protocol handling  | No (Envoy config, not in container)                 |
+| **5. Malware-blocking DNS**           | Cloudflare 1.1.1.2 / 1.0.0.2 via Envoy DNS listener                             | Known malware, phishing, and C2 domains               | No (Envoy resolves DNS, containers cannot override) |
 
 **Why SNI spoofing doesn't work:** If an attacker forges the SNI to `api.anthropic.com` while connecting to `evil.com`'s IP, Envoy resolves `api.anthropic.com` via DNS independently and connects to the **real** IP — not the attacker's server.
 
 **What gets blocked / allowed:**
+
 - `curl https://evil.com` — SNI not in whitelist → **BLOCKED**
 - `ssh user@evil.com` — no SSH egress rule configured → **BLOCKED**
 - `ssh git@github.com` — SSH rule with port 22 in egressPolicy → **ALLOWED** (via dedicated Envoy listener)
@@ -137,6 +138,7 @@ pulumi up
 ```
 
 `pulumi up` will:
+
 1. Provision a VPS (Hetzner, DigitalOcean, or Oracle Cloud)
 2. Install Docker + Tailscale on the host (switching to Tailscale IP for subsequent commands)
 3. Create Docker networks + deploy Envoy egress proxy
@@ -148,29 +150,29 @@ pulumi up
 
 Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for a complete example.
 
-| Key | Type | Required | Description |
-|-----|------|----------|-------------|
-| `provider` | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes | VPS provider |
-| `serverType` | string | yes | Server type (e.g. `cx22`, `cax21`) |
-| `region` | string | yes | Datacenter region (e.g. `fsn1`) |
-| `sshKeyId` | string | yes | SSH key ID at provider |
-| `tailscaleAuthKey` | secret | yes | One-time Tailscale auth key |
-| `egressPolicy` | `EgressRule[]` | yes | User egress rules (additive to hardcoded) |
-| `gateways` | `GatewayConfig[]` | yes | Gateway profile definitions (1+) |
-| `gatewayToken-<profile>` | secret | per-gateway | Auth token for each gateway |
+| Key                      | Type                                          | Required    | Description                               |
+| ------------------------ | --------------------------------------------- | ----------- | ----------------------------------------- |
+| `provider`               | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes         | VPS provider                              |
+| `serverType`             | string                                        | yes         | Server type (e.g. `cx22`, `cax21`)        |
+| `region`                 | string                                        | yes         | Datacenter region (e.g. `fsn1`)           |
+| `sshKeyId`               | string                                        | yes         | SSH key ID at provider                    |
+| `tailscaleAuthKey`       | secret                                        | yes         | One-time Tailscale auth key               |
+| `egressPolicy`           | `EgressRule[]`                                | yes         | User egress rules (additive to hardcoded) |
+| `gateways`               | `GatewayConfig[]`                             | yes         | Gateway profile definitions (1+)          |
+| `gatewayToken-<profile>` | secret                                        | per-gateway | Auth token for each gateway               |
 
 **Gateway profile fields:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `profile` | string | Unique name (used in resource names) |
-| `version` | string | OpenClaw version (`latest` or semver) |
-| `packages` | string[] | Extra apt packages baked into the image |
-| `port` | number | Gateway port (e.g. `18789`) |
-| `tailscale` | `"serve" \| "funnel"` | Tailscale ingress mode |
-| `configSet` | object | Key-value pairs for `openclaw config set` |
-| `installBrowser` | boolean | Bake Playwright + Chromium (~300MB) |
-| `env` | object | Extra environment variables |
+| Field            | Type                  | Description                               |
+| ---------------- | --------------------- | ----------------------------------------- |
+| `profile`        | string                | Unique name (used in resource names)      |
+| `version`        | string                | OpenClaw version (`latest` or semver)     |
+| `packages`       | string[]              | Extra apt packages baked into the image   |
+| `port`           | number                | Gateway port (e.g. `18789`)               |
+| `tailscale`      | `"serve" \| "funnel"` | Tailscale ingress mode                    |
+| `configSet`      | object                | Key-value pairs for `openclaw config set` |
+| `installBrowser` | boolean               | Bake Playwright + Chromium (~300MB)       |
+| `env`            | object                | Extra environment variables               |
 
 ## Component Hierarchy
 
@@ -187,12 +189,12 @@ Gateway(s) (1+ OpenClaw instances per server)
   ↓ optional Tailscale Serve/Funnel
 ```
 
-| Component | Pulumi Type | Provider | Purpose |
-|-----------|-------------|----------|---------|
-| `Server` | `openclaw:infra:Server` | `@pulumi/hcloud` / DO / OCI | Provision VPS, expose IP + SSH connection |
-| `HostBootstrap` | `openclaw:infra:HostBootstrap` | `@pulumi/command` | Install Docker + Tailscale on bare host |
-| `EnvoyEgress` | `openclaw:infra:EnvoyEgress` | `@pulumi/docker` + `@pulumi/command` | Create networks, deploy Envoy |
-| `Gateway` | `openclaw:app:Gateway` | `@pulumi/docker` + `@pulumi/command` | Build image, deploy container, configure gateway |
+| Component       | Pulumi Type                    | Provider                             | Purpose                                          |
+| --------------- | ------------------------------ | ------------------------------------ | ------------------------------------------------ |
+| `Server`        | `openclaw:infra:Server`        | `@pulumi/hcloud` / DO / OCI          | Provision VPS, expose IP + SSH connection        |
+| `HostBootstrap` | `openclaw:infra:HostBootstrap` | `@pulumi/command`                    | Install Docker + Tailscale on bare host          |
+| `EnvoyEgress`   | `openclaw:infra:EnvoyEgress`   | `@pulumi/docker` + `@pulumi/command` | Create networks, deploy Envoy                    |
+| `Gateway`       | `openclaw:app:Gateway`         | `@pulumi/docker` + `@pulumi/command` | Build image, deploy container, configure gateway |
 
 ## Egress Domain Whitelist
 
@@ -200,11 +202,11 @@ Envoy enforces protocol-aware egress filtering: TLS connections are filtered by 
 
 **Always included (hardcoded, cannot be removed):**
 
-| Category | Domains |
-|----------|---------|
-| Infrastructure | `clawhub.com`, `registry.npmjs.org` |
-| AI providers | `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `openrouter.ai`, `api.x.ai` |
-| Homebrew | `github.com`, `*.githubusercontent.com`, `ghcr.io`, `formulae.brew.sh` |
+| Category       | Domains                                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------- |
+| Infrastructure | `clawhub.com`, `registry.npmjs.org`                                                                     |
+| AI providers   | `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `openrouter.ai`, `api.x.ai` |
+| Homebrew       | `github.com`, `*.githubusercontent.com`, `ghcr.io`, `formulae.brew.sh`                                  |
 
 User-defined `egressPolicy` rules are **additive** — hardcoded domains are always present. Duplicates are deduplicated by `mergeEgressPolicy()`.
 

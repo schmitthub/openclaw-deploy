@@ -29,7 +29,12 @@ export const DEFAULT_GATEWAY_BIND = "lan";
 export const DOCKER_BASE_IMAGE = "node:22-bookworm";
 
 // Core apt packages (always installed)
-export const CORE_APT_PACKAGES = ["iptables", "iproute2", "gosu", "libsecret-tools"];
+export const CORE_APT_PACKAGES = [
+  "iptables",
+  "iproute2",
+  "gosu",
+  "libsecret-tools",
+];
 
 // Tailscale Funnel allowed ports
 export const TAILSCALE_FUNNEL_PORTS = [443, 8443, 10000];

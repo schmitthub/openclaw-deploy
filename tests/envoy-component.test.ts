@@ -27,9 +27,7 @@ describe("EnvoyEgress module", () => {
     const args: EnvoyEgressArgs = {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
-      egressPolicy: [
-        { dst: "example.com", proto: "tls", action: "allow" },
-      ],
+      egressPolicy: [{ dst: "example.com", proto: "tls", action: "allow" }],
     };
     expect(args.dockerHost).toBeTruthy();
     expect(args.connection).toBeTruthy();

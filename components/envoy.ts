@@ -124,7 +124,8 @@ export class EnvoyEgress extends pulumi.ComponentResource {
     // Each inspected domain gets a cert signed by the CA. Uses temp files for the
     // SAN extension and CSR to avoid process substitution (portability).
     const domainCertCommands: command.remote.Command[] = [];
-    const HOSTNAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+    const HOSTNAME_RE =
+      /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
     for (const domain of envoyConfig.inspectedDomains) {
       if (!HOSTNAME_RE.test(domain)) {
         throw new Error(`Invalid domain for MITM cert generation: ${domain}`);
@@ -201,7 +202,13 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       {
         parent: this,
         provider: dockerProvider,
-        dependsOn: [writeEnvoyConfig, generateCA, ...domainCertCommands, internalNetwork, egressNetwork],
+        dependsOn: [
+          writeEnvoyConfig,
+          generateCA,
+          ...domainCertCommands,
+          internalNetwork,
+          egressNetwork,
+        ],
       },
     );
 

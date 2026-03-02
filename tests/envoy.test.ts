@@ -62,9 +62,7 @@ describe("renderEnvoyConfig", () => {
 
     it("has TLS Inspector listener filter", () => {
       const { yaml } = renderEnvoyConfig();
-      expect(yaml).toContain(
-        "envoy.filters.listener.tls_inspector",
-      );
+      expect(yaml).toContain("envoy.filters.listener.tls_inspector");
     });
 
     it("uses sni_dynamic_forward_proxy filter", () => {
@@ -99,9 +97,7 @@ describe("renderEnvoyConfig", () => {
 
     it("uses dns_filter", () => {
       const { yaml } = renderEnvoyConfig();
-      expect(yaml).toContain(
-        "envoy.extensions.filters.udp.dns_filter",
-      );
+      expect(yaml).toContain("envoy.extensions.filters.udp.dns_filter");
     });
 
     it("forwards to Cloudflare primary resolver", () => {
@@ -116,9 +112,7 @@ describe("renderEnvoyConfig", () => {
 
     it("uses c-ares DNS resolver", () => {
       const { yaml } = renderEnvoyConfig();
-      expect(yaml).toContain(
-        "envoy.extensions.network.dns_resolver.cares",
-      );
+      expect(yaml).toContain("envoy.extensions.network.dns_resolver.cares");
     });
   });
 
@@ -364,9 +358,10 @@ describe("renderEnvoyConfig", () => {
       const clusterStart = yaml.indexOf("tcp_ssh_140_82_121_4_22");
       const afterCluster = yaml.substring(clusterStart);
       const nextClusterOrEnd = afterCluster.indexOf("\n  - name:", 1);
-      const clusterBlock = nextClusterOrEnd > 0
-        ? afterCluster.substring(0, nextClusterOrEnd)
-        : afterCluster;
+      const clusterBlock =
+        nextClusterOrEnd > 0
+          ? afterCluster.substring(0, nextClusterOrEnd)
+          : afterCluster;
       expect(clusterBlock).not.toContain("dns_resolver");
     });
 
@@ -477,7 +472,11 @@ describe("renderEnvoyConfig", () => {
 
     it("handles domains with hyphens, numbers, and deep subdomains", () => {
       const userRules: EgressRule[] = [
-        { dst: "my-api-v2.sub.deep.example.com", proto: "tls", action: "allow" },
+        {
+          dst: "my-api-v2.sub.deep.example.com",
+          proto: "tls",
+          action: "allow",
+        },
         { dst: "123-service.io", proto: "tls", action: "allow" },
       ];
       const { yaml, warnings } = renderEnvoyConfig(userRules);
@@ -549,8 +548,12 @@ describe("renderEnvoyConfig", () => {
       expect(warnings).toHaveLength(0);
       expect(inspectedDomains).toEqual(["api.slack.com"]);
       expect(yaml).toContain("DownstreamTlsContext");
-      expect(yaml).toContain(`${ENVOY_MITM_CERTS_CONTAINER_DIR}/api.slack.com-cert.pem`);
-      expect(yaml).toContain(`${ENVOY_MITM_CERTS_CONTAINER_DIR}/api.slack.com-key.pem`);
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/api.slack.com-cert.pem`,
+      );
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/api.slack.com-key.pem`,
+      );
       expect(yaml).toContain(`cluster: ${ENVOY_MITM_CLUSTER_NAME}`);
     });
 
@@ -561,7 +564,9 @@ describe("renderEnvoyConfig", () => {
       ];
       const { yaml } = renderEnvoyConfig(rules);
       // Extract the passthrough filter chain section
-      const passthroughSection = yaml.split("Whitelisted TLS domains")[1]?.split("Default deny")[0] ?? "";
+      const passthroughSection =
+        yaml.split("Whitelisted TLS domains")[1]?.split("Default deny")[0] ??
+        "";
       expect(passthroughSection).toContain('"other.com"');
       expect(passthroughSection).not.toContain('"api.slack.com"');
     });
@@ -643,8 +648,12 @@ describe("renderEnvoyConfig", () => {
       ];
       const { yaml, inspectedDomains } = renderEnvoyConfig(rules);
       expect(inspectedDomains).toEqual(["a.com", "b.com"]);
-      expect(yaml).toContain(`${ENVOY_MITM_CERTS_CONTAINER_DIR}/a.com-cert.pem`);
-      expect(yaml).toContain(`${ENVOY_MITM_CERTS_CONTAINER_DIR}/b.com-cert.pem`);
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/a.com-cert.pem`,
+      );
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/b.com-cert.pem`,
+      );
       // Both should have MITM filter chain comments
       const mitmMatches = yaml.match(/MITM TLS inspection:/g);
       expect(mitmMatches).toHaveLength(2);
@@ -658,10 +667,14 @@ describe("renderEnvoyConfig", () => {
       const { yaml, inspectedDomains } = renderEnvoyConfig(rules);
       expect(inspectedDomains).toEqual(["inspect.com"]);
       // pass.com in passthrough section
-      const passthroughSection = yaml.split("Whitelisted TLS domains")[1]?.split("Default deny")[0] ?? "";
+      const passthroughSection =
+        yaml.split("Whitelisted TLS domains")[1]?.split("Default deny")[0] ??
+        "";
       expect(passthroughSection).toContain('"pass.com"');
       // inspect.com in MITM filter chain
-      expect(yaml).toContain(`${ENVOY_MITM_CERTS_CONTAINER_DIR}/inspect.com-cert.pem`);
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/inspect.com-cert.pem`,
+      );
     });
 
     it("does not emit MITM cluster when no inspect rules exist", () => {

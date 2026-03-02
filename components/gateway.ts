@@ -8,7 +8,11 @@ import {
   ENVOY_STATIC_IP,
   ENVOY_CA_CERT_PATH,
 } from "../config";
-import { renderDockerfile, renderEntrypoint, TcpPortMapping } from "../templates";
+import {
+  renderDockerfile,
+  renderEntrypoint,
+  TcpPortMapping,
+} from "../templates";
 
 export interface GatewayArgs {
   /** Docker host URI, e.g. "ssh://root@<ip>" */
@@ -137,7 +141,9 @@ export class Gateway extends pulumi.ComponentResource {
           `TERM=xterm-256color`,
           `NODE_EXTRA_CA_CERTS=${ENVOY_CA_CERT_PATH}`,
           ...(args.tcpPortMappings && args.tcpPortMappings.length > 0
-            ? [`OPENCLAW_TCP_MAPPINGS=${args.tcpPortMappings.map((m) => `${m.dst}:${m.dstPort}:${m.envoyPort}`).join(";")}`]
+            ? [
+                `OPENCLAW_TCP_MAPPINGS=${args.tcpPortMappings.map((m) => `${m.dst}:${m.dstPort}:${m.envoyPort}`).join(";")}`,
+              ]
             : []),
           ...Object.entries(args.env ?? {}).map(([k, v]) => `${k}=${v}`),
         ],

@@ -67,9 +67,7 @@ export class HostBootstrap extends pulumi.ComponentResource {
       return lines[lines.length - 1].trim();
     });
 
-    this.dockerHost = this.tailscaleIP.apply(
-      (ip) => `ssh://root@${ip}`,
-    );
+    this.dockerHost = this.tailscaleIP.apply((ip) => `ssh://root@${ip}`);
 
     this.registerOutputs({
       dockerReady: this.dockerReady,

@@ -100,9 +100,7 @@ describe("mergeEgressPolicy", () => {
       { dst: "api.anthropic.com", proto: "tls", port: 8443, action: "allow" },
     ];
     const merged = mergeEgressPolicy(userRules);
-    const anthropicRules = merged.filter(
-      (r) => r.dst === "api.anthropic.com",
-    );
+    const anthropicRules = merged.filter((r) => r.dst === "api.anthropic.com");
     expect(anthropicRules).toHaveLength(2); // default port + 8443
   });
 
@@ -151,7 +149,12 @@ describe("defaults", () => {
 
   it("includes all required core apt packages", () => {
     expect(CORE_APT_PACKAGES).toEqual(
-      expect.arrayContaining(["iptables", "iproute2", "gosu", "libsecret-tools"]),
+      expect.arrayContaining([
+        "iptables",
+        "iproute2",
+        "gosu",
+        "libsecret-tools",
+      ]),
     );
   });
 

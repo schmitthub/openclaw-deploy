@@ -118,7 +118,9 @@ describe("renderDockerfile", () => {
       version: "latest",
       packages: ["ffmpeg", "imagemagick"],
     });
-    expect(df).toContain('ARG OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg imagemagick"');
+    expect(df).toContain(
+      'ARG OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg imagemagick"',
+    );
     expect(df).toContain("$OPENCLAW_DOCKER_APT_PACKAGES");
     // Core packages still present as direct install
     expect(df).toContain("iptables");
@@ -193,7 +195,10 @@ describe("renderDockerfile", () => {
 
   it("different packages produce different Dockerfiles", () => {
     const a = renderDockerfile({ version: "latest", packages: ["ffmpeg"] });
-    const b = renderDockerfile({ version: "latest", packages: ["imagemagick"] });
+    const b = renderDockerfile({
+      version: "latest",
+      packages: ["imagemagick"],
+    });
     expect(a).not.toBe(b);
     expect(a).toContain("ffmpeg");
     expect(b).toContain("imagemagick");
@@ -223,7 +228,9 @@ describe("renderDockerfile", () => {
     const packages = Array.from({ length: 30 }, (_, i) => `pkg-${i}`);
     const df = renderDockerfile({ version: "latest", packages });
     // All packages present in the ARG
-    expect(df).toContain(`ARG OPENCLAW_DOCKER_APT_PACKAGES="${packages.join(" ")}"`);
+    expect(df).toContain(
+      `ARG OPENCLAW_DOCKER_APT_PACKAGES="${packages.join(" ")}"`,
+    );
     // Still a valid Dockerfile (has FROM and ENTRYPOINT)
     expect(df).toContain(`FROM ${DOCKER_BASE_IMAGE}`);
     expect(df).toContain('ENTRYPOINT ["entrypoint.sh"]');
@@ -266,9 +273,7 @@ describe("renderEntrypoint", () => {
   });
 
   it("has iptables NAT DNAT to Envoy egress port", () => {
-    expect(ep).toContain(
-      `--to-destination "$ENVOY_IP":${ENVOY_EGRESS_PORT}`,
-    );
+    expect(ep).toContain(`--to-destination "$ENVOY_IP":${ENVOY_EGRESS_PORT}`);
   });
 
   it("skips DNAT for loopback", () => {
@@ -302,9 +307,7 @@ describe("renderEntrypoint", () => {
   });
 
   it("allows internal subnet traffic", () => {
-    expect(ep).toContain(
-      'iptables -A OUTPUT -d "$INTERNAL_SUBNET" -j ACCEPT',
-    );
+    expect(ep).toContain('iptables -A OUTPUT -d "$INTERNAL_SUBNET" -j ACCEPT');
   });
 
   it("logs blocked connections with OPENCLAW-BLOCKED prefix", () => {
@@ -369,7 +372,7 @@ describe("renderEntrypoint", () => {
 
     it("only processes mappings when env var is set", () => {
       // Should be conditional on OPENCLAW_TCP_MAPPINGS being non-empty
-      expect(ep).toContain('${OPENCLAW_TCP_MAPPINGS:-}');
+      expect(ep).toContain("${OPENCLAW_TCP_MAPPINGS:-}");
     });
   });
 

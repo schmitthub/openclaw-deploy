@@ -280,9 +280,7 @@ export function renderEnvoyConfig(
     .map((d) => `        - "${d}"`)
     .join("\n");
 
-  const mitmFilterChains = mitmConfigs
-    .map(renderMitmFilterChain)
-    .join("\n");
+  const mitmFilterChains = mitmConfigs.map(renderMitmFilterChain).join("\n");
 
   const hasMitm = inspectedDomains.length > 0;
   const mitmClusterSection = hasMitm ? renderMitmCluster() : "";
