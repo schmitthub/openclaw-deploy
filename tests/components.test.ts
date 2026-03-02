@@ -347,6 +347,19 @@ describe("EnvoyEgress component", () => {
     expect(envoy.warnings[0]).toContain("SSH");
     expect(envoy.warnings[0]).toContain("Phase 2");
   });
+
+  it("exposes caCertPath output for gateway NODE_EXTRA_CA_CERTS", async () => {
+    const { EnvoyEgress } = await import("../components/envoy");
+    const { ENVOY_CA_CERT_PATH } = await import("../config");
+    const envoy = new EnvoyEgress("test-envoy-ca", {
+      dockerHost: "ssh://root@100.64.0.1",
+      connection: { host: "100.64.0.1", user: "root" },
+      egressPolicy: [],
+    });
+
+    const caCertPath = await promiseOf(envoy.caCertPath);
+    expect(caCertPath).toBe(ENVOY_CA_CERT_PATH);
+  });
 });
 
 describe("Gateway component", () => {

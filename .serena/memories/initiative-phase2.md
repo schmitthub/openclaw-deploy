@@ -12,8 +12,8 @@
 |------|--------|-------|
 | Task 1: CI/CD pipeline & pre-commit hooks | `complete` | — |
 | Task 2: DigitalOcean provider | `complete` | — |
-| Task 3: Oracle Cloud provider (ARM) | `pending` | — |
-| Task 4: Envoy CA certificate infrastructure | `pending` | — |
+| Task 3: Oracle Cloud provider (ARM) | `complete` | — |
+| Task 4: Envoy CA certificate infrastructure | `complete` | — |
 | Task 5: MITM TLS inspection for path-level filtering | `pending` | — |
 | Task 6: DNS snooping for SSH/TCP egress | `pending` | — |
 
@@ -23,6 +23,8 @@
 
 - **Task 1**: Husky v9 `init` creates pre-commit without shebang — added manually. Existing `pr.yml` + `security.yml` workflows only handle gitleaks; CI workflow added separately. Existing component tests were already reasonable; added `tailscaleIP` direct assertion and tightened `tailscaleUrl` assertions from `toContain` to `toBe`.
 - **Task 2**: Straightforward — followed Hetzner pattern exactly. Code reviewer caught that DO now offers ARM droplets (slug suffix `-arm`), so `arch` detection was changed from hardcoded `"amd64"` to slug-based detection mirroring Hetzner's `cax` prefix pattern. DO uses `ipv4Address` output (same field name as Hetzner). Default image slug uses dashes (`ubuntu-24-04-x64`) vs Hetzner dots (`ubuntu-24.04`).
+- **Task 4**: CA generation uses `openssl req -x509 -newkey ec` with P-256 curve (fast, small keys). Made idempotent with `[ -f ca-cert.pem ] || (openssl ... && chmod)` guard. CA cert mounted into Envoy container (`/etc/envoy/ca-cert.pem`) and gateway container (at host path via `ENVOY_CA_CERT_PATH`). Gateway trusts via `NODE_EXTRA_CA_CERTS` env var — standard Node.js mechanism. `caCertPath` exposed as `pulumi.Output<string>` from `EnvoyEgress`. Code review findings: (1) removed dead `caCertPath` arg from `GatewayArgs` — the constant is always correct and the arg was misleading; (2) deferred CA key mount in Envoy container to Task 5 — only the cert (public) is mounted now, the key (private) stays on host until MITM filter chains need it; (3) added `chmod 644` on cert and `chmod 640` on key during generation to ensure correct permissions when Task 5 mounts the key.
+- **Task 3**: OCI doesn't expose public IP directly on `oci.core.Instance` — requires VNIC attachment lookup chain (`getVnicAttachmentsOutput` → `getVnic`). Used `*Output` variants for idiomatic Pulumi data source chaining. OCI Ubuntu images default to `ubuntu` user with root disabled — added cloud-init user_data to copy SSH keys to root and enable `PermitRootLogin prohibit-password`, matching Hetzner/DO root SSH pattern. OCI flex shapes (`VM.Standard.A1.Flex`) require `shapeConfig` with `ocpus` and `memoryInGbs` — added as optional `ServerArgs` fields with defaults (2 OCPUs, 12GB). OCI `image` is a region-specific OCID (not a slug) — made required for Oracle provider. ARM detection uses `VM.Standard.A1` shape prefix.
 
 ---
 

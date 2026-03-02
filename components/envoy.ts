@@ -9,6 +9,8 @@ import {
   INTERNAL_NETWORK_NAME,
   EGRESS_NETWORK_NAME,
   ENVOY_CONFIG_HOST_DIR,
+  ENVOY_CA_CERT_PATH,
+  ENVOY_CA_KEY_PATH,
 } from "../config";
 import { renderEnvoyConfig } from "../templates";
 
@@ -34,6 +36,8 @@ export class EnvoyEgress extends pulumi.ComponentResource {
   public readonly egressNetworkName: pulumi.Output<string>;
   /** Envoy container ID */
   public readonly containerId: pulumi.Output<string>;
+  /** Host path to the CA certificate (for gateway NODE_EXTRA_CA_CERTS) */
+  public readonly caCertPath: pulumi.Output<string>;
   /** Warnings from egress policy rendering (e.g. unsupported rule types) */
   public readonly warnings: string[];
 
@@ -92,7 +96,23 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Step 4: Create the Envoy container
+    // Step 4: Generate CA certificate for MITM TLS inspection (idempotent).
+    // Only generates if cert doesn't already exist. Used by Task 5 for TLS
+    // termination and by gateway containers via NODE_EXTRA_CA_CERTS.
+    const generateCA = new command.remote.Command(
+      `${name}-generate-ca`,
+      {
+        connection: args.connection,
+        create: [
+          `mkdir -p ${ENVOY_CONFIG_HOST_DIR}`,
+          `[ -f ${ENVOY_CA_CERT_PATH} ] || (openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 3650 -nodes -subj "/CN=OpenClaw Egress CA" -keyout ${ENVOY_CA_KEY_PATH} -out ${ENVOY_CA_CERT_PATH} && chmod 644 ${ENVOY_CA_CERT_PATH} && chmod 640 ${ENVOY_CA_KEY_PATH})`,
+        ].join(" && "),
+        delete: `rm -f ${ENVOY_CA_CERT_PATH} ${ENVOY_CA_KEY_PATH}`,
+      },
+      { parent: this },
+    );
+
+    // Step 5: Create the Envoy container
     const envoyContainer = new docker.Container(
       `${name}-envoy`,
       {
@@ -116,12 +136,17 @@ export class EnvoyEgress extends pulumi.ComponentResource {
             containerPath: "/etc/envoy/envoy.yaml",
             readOnly: true,
           },
+          {
+            hostPath: ENVOY_CA_CERT_PATH,
+            containerPath: "/etc/envoy/ca-cert.pem",
+            readOnly: true,
+          },
         ],
       },
       {
         parent: this,
         provider: dockerProvider,
-        dependsOn: [writeEnvoyConfig, internalNetwork, egressNetwork],
+        dependsOn: [writeEnvoyConfig, generateCA, internalNetwork, egressNetwork],
       },
     );
 
@@ -132,6 +157,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
     this.egressNetworkId = egressNetwork.id;
     this.egressNetworkName = egressNetwork.name;
     this.containerId = envoyContainer.id;
+    this.caCertPath = pulumi.output(ENVOY_CA_CERT_PATH);
 
     this.registerOutputs({
       envoyIP: this.envoyIP,
@@ -140,6 +166,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       egressNetworkId: this.egressNetworkId,
       egressNetworkName: this.egressNetworkName,
       containerId: this.containerId,
+      caCertPath: this.caCertPath,
       warnings: this.warnings,
     });
   }

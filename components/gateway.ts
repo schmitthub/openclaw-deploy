@@ -6,6 +6,7 @@ import {
   DEFAULT_OPENCLAW_CONFIG_DIR,
   DEFAULT_OPENCLAW_WORKSPACE_DIR,
   ENVOY_STATIC_IP,
+  ENVOY_CA_CERT_PATH,
 } from "../config";
 import { renderDockerfile, renderEntrypoint } from "../templates";
 
@@ -132,6 +133,7 @@ export class Gateway extends pulumi.ComponentResource {
         envs: [
           `HOME=/home/node`,
           `TERM=xterm-256color`,
+          `NODE_EXTRA_CA_CERTS=${ENVOY_CA_CERT_PATH}`,
           ...Object.entries(args.env ?? {}).map(([k, v]) => `${k}=${v}`),
         ],
         command: [
@@ -150,6 +152,11 @@ export class Gateway extends pulumi.ComponentResource {
           {
             hostPath: `${dataDir}/workspace`,
             containerPath: DEFAULT_OPENCLAW_WORKSPACE_DIR,
+          },
+          {
+            hostPath: ENVOY_CA_CERT_PATH,
+            containerPath: ENVOY_CA_CERT_PATH,
+            readOnly: true,
           },
         ],
         networksAdvanced: [{ name: args.internalNetworkName }],

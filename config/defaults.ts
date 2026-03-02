@@ -11,6 +11,8 @@ export const ENVOY_DNS_PORT = 53;
 export const CLOUDFLARE_DNS_PRIMARY = "1.1.1.2";
 export const CLOUDFLARE_DNS_SECONDARY = "1.0.0.2";
 export const ENVOY_CONFIG_HOST_DIR = "/opt/openclaw-deploy/envoy";
+export const ENVOY_CA_CERT_PATH = "/opt/openclaw-deploy/envoy/ca-cert.pem";
+export const ENVOY_CA_KEY_PATH = "/opt/openclaw-deploy/envoy/ca-key.pem";
 
 // Gateway defaults
 export const DEFAULT_GATEWAY_PORT = 18789;

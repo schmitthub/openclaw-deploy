@@ -7,6 +7,8 @@ import {
   INTERNAL_NETWORK_NAME,
   EGRESS_NETWORK_NAME,
   ENVOY_CONFIG_HOST_DIR,
+  ENVOY_CA_CERT_PATH,
+  ENVOY_CA_KEY_PATH,
 } from "../config";
 
 describe("EnvoyEgress module", () => {
@@ -61,5 +63,17 @@ describe("EnvoyEgress constants", () => {
   it("ENVOY_CONFIG_HOST_DIR is an absolute path", () => {
     expect(ENVOY_CONFIG_HOST_DIR).toMatch(/^\//);
     expect(ENVOY_CONFIG_HOST_DIR).toBe("/opt/openclaw-deploy/envoy");
+  });
+
+  it("ENVOY_CA_CERT_PATH is under the envoy config directory", () => {
+    expect(ENVOY_CA_CERT_PATH).toMatch(/^\//);
+    expect(ENVOY_CA_CERT_PATH).toBe("/opt/openclaw-deploy/envoy/ca-cert.pem");
+    expect(ENVOY_CA_CERT_PATH).toContain(ENVOY_CONFIG_HOST_DIR);
+  });
+
+  it("ENVOY_CA_KEY_PATH is under the envoy config directory", () => {
+    expect(ENVOY_CA_KEY_PATH).toMatch(/^\//);
+    expect(ENVOY_CA_KEY_PATH).toBe("/opt/openclaw-deploy/envoy/ca-key.pem");
+    expect(ENVOY_CA_KEY_PATH).toContain(ENVOY_CONFIG_HOST_DIR);
   });
 });
