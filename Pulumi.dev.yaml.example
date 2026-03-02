@@ -1,0 +1,40 @@
+# Example stack configuration for a dev server.
+#
+# Before running `pulumi up`, set required secrets:
+#   pulumi config set --secret tailscaleAuthKey <your-tailscale-auth-key>
+#   pulumi config set --secret gatewayToken-personal <token>
+#   pulumi config set --secret gatewayToken-automation <token>
+#
+# Generate tokens with: openssl rand -hex 32
+
+config:
+  openclaw-deploy:provider: hetzner
+  openclaw-deploy:serverType: cx22
+  openclaw-deploy:region: fsn1
+  openclaw-deploy:sshKeyId: "12345"
+  openclaw-deploy:egressPolicy:
+    - dst: "api.anthropic.com"
+      proto: tls
+      action: allow
+    - dst: "discord.com"
+      proto: tls
+      action: allow
+    - dst: "gateway.discord.gg"
+      proto: tls
+      action: allow
+  openclaw-deploy:gateways:
+    - profile: personal
+      version: latest
+      packages:
+        - ffmpeg
+        - imagemagick
+      port: 18789
+      tailscale: serve
+      configSet:
+        gateway.controlUi.allowedOrigins: '["https://localhost"]'
+    - profile: automation
+      version: latest
+      packages: []
+      port: 18790
+      tailscale: funnel
+      configSet: {}
