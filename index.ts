@@ -19,6 +19,12 @@ const serverType = cfg.require("serverType");
 const region = cfg.require("region");
 const sshKeyId = cfg.require("sshKeyId");
 
+// OCI-specific config (required when provider === "oracle")
+const compartmentId = cfg.get("compartmentId");
+const subnetId = cfg.get("subnetId");
+const ocpus = cfg.getNumber("ocpus");
+const memoryInGbs = cfg.getNumber("memoryInGbs");
+
 // Tailscale
 const tailscaleAuthKey = cfg.requireSecret("tailscaleAuthKey");
 
@@ -47,6 +53,10 @@ const server = new Server("server", {
   serverType,
   region,
   sshKeyId,
+  ...(compartmentId && { compartmentId }),
+  ...(subnetId && { subnetId }),
+  ...(ocpus !== undefined && { ocpus }),
+  ...(memoryInGbs !== undefined && { memoryInGbs }),
 });
 
 // 2. Install Docker + Tailscale on the host

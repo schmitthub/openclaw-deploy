@@ -24,6 +24,11 @@ beforeAll(() => {
           state.ipv4Address = state.ipv4Address ?? "198.51.100.20";
         }
 
+        // oci.core.Instance — provide a fake instance ID
+        if (args.type === "oci:Core/instance:Instance") {
+          state.id = state.id ?? "ocid1.instance.oc1.phx.mock";
+        }
+
         // command.remote.Command — provide stdout/stderr
         if (args.type === "command:remote:Command") {
           state.stdout = state.stdout ?? "mock-stdout";
@@ -32,7 +37,22 @@ beforeAll(() => {
 
         return { id: `${args.name}-id`, state };
       },
-      call: (args: pulumi.runtime.MockCallArgs) => args.inputs,
+      call: (args: pulumi.runtime.MockCallArgs) => {
+        // oci.core.getVnicAttachments — return a mock VNIC attachment
+        if (args.token === "oci:Core/getVnicAttachments:getVnicAttachments") {
+          return {
+            vnicAttachments: [{ vnicId: "ocid1.vnic.oc1.phx.mock" }],
+          };
+        }
+        // oci.core.getVnic — return a mock public IP
+        if (args.token === "oci:Core/getVnic:getVnic") {
+          return {
+            publicIpAddress: "152.70.100.30",
+            privateIpAddress: "10.0.0.2",
+          };
+        }
+        return args.inputs;
+      },
     },
     "test",
     "test",
@@ -149,17 +169,104 @@ describe("Server component", () => {
     expect(arch).toBe("arm64");
   });
 
-  it("throws for oracle provider (Phase 2)", async () => {
+  it("creates an Oracle Cloud instance with expected outputs", async () => {
+    const { Server } = await import("../components/server");
+    const server = new Server("test-oci", {
+      provider: "oracle",
+      serverType: "VM.Standard.A1.Flex",
+      region: "Uocm:PHX-AD-1",
+      sshKeyId: "ssh-ed25519 AAAA... user@host",
+      compartmentId: "ocid1.compartment.oc1..mock",
+      subnetId: "ocid1.subnet.oc1.phx.mock",
+      image: "ocid1.image.oc1.phx.mock",
+    });
+
+    const ip = await promiseOf(server.ipAddress);
+    expect(ip).toBe("152.70.100.30");
+
+    const conn = await promiseOf(server.connection);
+    expect(conn.host).toBe("152.70.100.30");
+    expect(conn.user).toBe("root");
+
+    const dockerHost = await promiseOf(server.dockerHost);
+    expect(dockerHost).toBe("ssh://root@152.70.100.30");
+  });
+
+  it("detects arm64 architecture for Oracle A1 shapes", async () => {
+    const { Server } = await import("../components/server");
+    const server = new Server("test-oci-arm", {
+      provider: "oracle",
+      serverType: "VM.Standard.A1.Flex",
+      region: "Uocm:PHX-AD-1",
+      sshKeyId: "ssh-ed25519 AAAA...",
+      compartmentId: "ocid1.compartment.oc1..mock",
+      subnetId: "ocid1.subnet.oc1.phx.mock",
+      image: "ocid1.image.oc1.phx.mock",
+    });
+
+    const arch = await promiseOf(server.arch);
+    expect(arch).toBe("arm64");
+  });
+
+  it("detects amd64 architecture for Oracle E2 shapes", async () => {
+    const { Server } = await import("../components/server");
+    const server = new Server("test-oci-amd", {
+      provider: "oracle",
+      serverType: "VM.Standard.E2.1.Micro",
+      region: "Uocm:PHX-AD-1",
+      sshKeyId: "ssh-ed25519 AAAA...",
+      compartmentId: "ocid1.compartment.oc1..mock",
+      subnetId: "ocid1.subnet.oc1.phx.mock",
+      image: "ocid1.image.oc1.phx.mock",
+    });
+
+    const arch = await promiseOf(server.arch);
+    expect(arch).toBe("amd64");
+  });
+
+  it("throws when Oracle provider is missing compartmentId", async () => {
     const { Server } = await import("../components/server");
     expect(
       () =>
-        new Server("test-oracle", {
+        new Server("test-oci-no-compartment", {
           provider: "oracle",
           serverType: "VM.Standard.A1.Flex",
-          region: "us-ashburn-1",
-          sshKeyId: "abc",
+          region: "Uocm:PHX-AD-1",
+          sshKeyId: "ssh-ed25519 AAAA...",
+          subnetId: "ocid1.subnet.oc1.phx.mock",
+          image: "ocid1.image.oc1.phx.mock",
         }),
-    ).toThrow(/oracle.*not yet supported/i);
+    ).toThrow(/compartmentId/);
+  });
+
+  it("throws when Oracle provider is missing subnetId", async () => {
+    const { Server } = await import("../components/server");
+    expect(
+      () =>
+        new Server("test-oci-no-subnet", {
+          provider: "oracle",
+          serverType: "VM.Standard.A1.Flex",
+          region: "Uocm:PHX-AD-1",
+          sshKeyId: "ssh-ed25519 AAAA...",
+          compartmentId: "ocid1.compartment.oc1..mock",
+          image: "ocid1.image.oc1.phx.mock",
+        }),
+    ).toThrow(/subnetId/);
+  });
+
+  it("throws when Oracle provider is missing image", async () => {
+    const { Server } = await import("../components/server");
+    expect(
+      () =>
+        new Server("test-oci-no-image", {
+          provider: "oracle",
+          serverType: "VM.Standard.A1.Flex",
+          region: "Uocm:PHX-AD-1",
+          sshKeyId: "ssh-ed25519 AAAA...",
+          compartmentId: "ocid1.compartment.oc1..mock",
+          subnetId: "ocid1.subnet.oc1.phx.mock",
+        }),
+    ).toThrow(/image/);
   });
 });
 

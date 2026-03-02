@@ -25,3 +25,8 @@ export const CORE_APT_PACKAGES = ["iptables", "iproute2", "gosu", "libsecret-too
 
 // Tailscale Funnel allowed ports
 export const TAILSCALE_FUNNEL_PORTS = [443, 8443, 10000];
+
+// Oracle Cloud (OCI) defaults
+export const OCI_ARM_SHAPE_PREFIX = "VM.Standard.A1";
+export const OCI_DEFAULT_OCPUS = 2;
+export const OCI_DEFAULT_MEMORY_GBS = 12;
