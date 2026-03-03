@@ -14,7 +14,11 @@ import {
   ENVOY_MITM_CERTS_HOST_DIR,
   ENVOY_MITM_CERTS_CONTAINER_DIR,
 } from "../config";
-import { renderEnvoyConfig, TcpPortMapping } from "../templates";
+import {
+  renderEnvoyConfig,
+  TcpPortMapping,
+  UdpPortMapping,
+} from "../templates";
 
 export interface EnvoyEgressArgs {
   /** Docker host URI, e.g. "ssh://root@<ip>" */
@@ -44,6 +48,8 @@ export class EnvoyEgress extends pulumi.ComponentResource {
   public readonly inspectedDomains: string[];
   /** Per-rule port mappings for SSH/TCP egress (passed to gateway containers) */
   public readonly tcpPortMappings: TcpPortMapping[];
+  /** Per-rule port mappings for UDP egress (passed to gateway containers) */
+  public readonly udpPortMappings: UdpPortMapping[];
   /** Warnings from egress policy rendering (e.g. unsupported rule types) */
   public readonly warnings: string[];
 
@@ -58,6 +64,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
     const envoyConfig = renderEnvoyConfig(args.egressPolicy);
     this.inspectedDomains = envoyConfig.inspectedDomains;
     this.tcpPortMappings = envoyConfig.tcpPortMappings;
+    this.udpPortMappings = envoyConfig.udpPortMappings;
     this.warnings = envoyConfig.warnings;
 
     // Docker provider connected to the remote host
@@ -168,6 +175,13 @@ export class EnvoyEgress extends pulumi.ComponentResource {
         restart: "unless-stopped",
         // Envoy runs as non-root 'envoy' user — allow binding to port 53
         sysctls: { "net.ipv4.ip_unprivileged_port_start": "53" },
+        healthcheck: {
+          tests: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/10000"],
+          interval: "5s",
+          timeout: "3s",
+          retries: 5,
+          startPeriod: "5s",
+        },
         networksAdvanced: [
           {
             name: internalNetwork.name,
@@ -231,6 +245,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       caCertPath: this.caCertPath,
       inspectedDomains: this.inspectedDomains,
       tcpPortMappings: this.tcpPortMappings,
+      udpPortMappings: this.udpPortMappings,
       warnings: this.warnings,
     });
   }

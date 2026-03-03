@@ -6,9 +6,9 @@ import {
   DEFAULT_OPENCLAW_CONFIG_DIR,
   DEFAULT_OPENCLAW_WORKSPACE_DIR,
   DEFAULT_GATEWAY_PORT,
-  DEFAULT_BRIDGE_PORT,
-  DEFAULT_GATEWAY_BIND,
   ENVOY_EGRESS_PORT,
+  TTYD_PORT,
+  FILEBROWSER_PORT,
 } from "../config/defaults";
 
 const defaultOpts: DockerfileOpts = { version: "2026.2" };
@@ -81,9 +81,15 @@ describe("renderDockerfile", () => {
     expect(df).toContain('ENTRYPOINT ["entrypoint.sh"]');
   });
 
-  it("sets CMD to openclaw gateway --allow-unconfigured", () => {
+  it("sets CMD to openclaw gateway with port only (no --bind, no --tailscale)", () => {
     const df = renderDockerfile(defaultOpts);
-    expect(df).toContain('CMD ["openclaw", "gateway", "--allow-unconfigured"]');
+    expect(df).toContain(
+      `CMD ["openclaw", "gateway", "--port", "${DEFAULT_GATEWAY_PORT}"]`,
+    );
+    // Must NOT contain --bind or --tailscale in CMD
+    const cmdLine = df.split("\n").find((l) => l.startsWith("CMD "));
+    expect(cmdLine).not.toContain("--bind");
+    expect(cmdLine).not.toContain("--tailscale");
   });
 
   it("uses default config dir when not specified", () => {
@@ -101,35 +107,6 @@ describe("renderDockerfile", () => {
   it("uses default gateway port when not specified", () => {
     const df = renderDockerfile(defaultOpts);
     expect(df).toContain(`OPENCLAW_GATEWAY_PORT=${DEFAULT_GATEWAY_PORT}`);
-  });
-
-  it("uses default bridge port when not specified", () => {
-    const df = renderDockerfile(defaultOpts);
-    expect(df).toContain(`OPENCLAW_BRIDGE_PORT=${DEFAULT_BRIDGE_PORT}`);
-  });
-
-  it("uses default gateway bind when not specified", () => {
-    const df = renderDockerfile(defaultOpts);
-    expect(df).toContain(`OPENCLAW_GATEWAY_BIND=${DEFAULT_GATEWAY_BIND}`);
-  });
-
-  it("includes custom packages via OPENCLAW_DOCKER_APT_PACKAGES ARG", () => {
-    const df = renderDockerfile({
-      version: "latest",
-      packages: ["ffmpeg", "imagemagick"],
-    });
-    expect(df).toContain(
-      'ARG OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg imagemagick"',
-    );
-    expect(df).toContain("$OPENCLAW_DOCKER_APT_PACKAGES");
-    // Core packages still present as direct install
-    expect(df).toContain("iptables");
-    expect(df).toContain("gosu");
-  });
-
-  it("emits empty OPENCLAW_DOCKER_APT_PACKAGES ARG when no packages", () => {
-    const df = renderDockerfile(defaultOpts);
-    expect(df).toContain('ARG OPENCLAW_DOCKER_APT_PACKAGES=""');
   });
 
   it("browser block has empty default when installBrowser is false", () => {
@@ -187,21 +164,26 @@ describe("renderDockerfile", () => {
     expect(df).toContain("/usr/local/bin/openclaw");
   });
 
+  it("installs Tailscale via official install script", () => {
+    const df = renderDockerfile(defaultOpts);
+    expect(df).toContain("https://tailscale.com/install.sh");
+  });
+
+  it("installs ttyd", () => {
+    const df = renderDockerfile(defaultOpts);
+    expect(df).toContain("ttyd");
+    expect(df).toContain("/usr/local/bin/ttyd");
+  });
+
+  it("installs filebrowser", () => {
+    const df = renderDockerfile(defaultOpts);
+    expect(df).toContain("filebrowser/get/master/get.sh");
+  });
+
   it("is idempotent — same args produce identical output", () => {
     const a = renderDockerfile(defaultOpts);
     const b = renderDockerfile(defaultOpts);
     expect(a).toBe(b);
-  });
-
-  it("different packages produce different Dockerfiles", () => {
-    const a = renderDockerfile({ version: "latest", packages: ["ffmpeg"] });
-    const b = renderDockerfile({
-      version: "latest",
-      packages: ["imagemagick"],
-    });
-    expect(a).not.toBe(b);
-    expect(a).toContain("ffmpeg");
-    expect(b).toContain("imagemagick");
   });
 
   it("different versions produce different Dockerfiles", () => {
@@ -212,28 +194,49 @@ describe("renderDockerfile", () => {
     expect(b).toContain("OPENCLAW_VERSION=2.0.0");
   });
 
-  it("empty packages list produces valid Dockerfile without trailing spaces in apt-get", () => {
-    const df = renderDockerfile({ version: "latest", packages: [] });
-    expect(df).toContain('ARG OPENCLAW_DOCKER_APT_PACKAGES=""');
-    // No trailing spaces in apt-get install lines
-    const lines = df.split("\n");
-    for (const line of lines) {
-      if (line.includes("apt-get install")) {
-        expect(line).not.toMatch(/ $/);
-      }
-    }
-  });
+  describe("imageSteps", () => {
+    it("renders imageSteps as USER+RUN pairs", () => {
+      const df = renderDockerfile({
+        version: "latest",
+        imageSteps: [
+          { user: "root", run: "apt-get install -y ffmpeg" },
+          { user: "node", run: "npm install -g some-tool" },
+        ],
+      });
+      expect(df).toContain("USER root\nRUN apt-get install -y ffmpeg");
+      expect(df).toContain("USER node\nRUN npm install -g some-tool");
+    });
 
-  it("very long package lists don't break formatting", () => {
-    const packages = Array.from({ length: 30 }, (_, i) => `pkg-${i}`);
-    const df = renderDockerfile({ version: "latest", packages });
-    // All packages present in the ARG
-    expect(df).toContain(
-      `ARG OPENCLAW_DOCKER_APT_PACKAGES="${packages.join(" ")}"`,
-    );
-    // Still a valid Dockerfile (has FROM and ENTRYPOINT)
-    expect(df).toContain(`FROM ${DOCKER_BASE_IMAGE}`);
-    expect(df).toContain('ENTRYPOINT ["entrypoint.sh"]');
+    it("restores USER root after imageSteps for entrypoint COPY", () => {
+      const df = renderDockerfile({
+        version: "latest",
+        imageSteps: [{ user: "node", run: "echo hello" }],
+      });
+      // After imageSteps, should have USER root before COPY
+      const stepsIdx = df.indexOf("RUN echo hello");
+      const userRootIdx = df.indexOf("USER root", stepsIdx);
+      const copyIdx = df.indexOf("COPY entrypoint.sh", stepsIdx);
+      expect(userRootIdx).toBeGreaterThan(stepsIdx);
+      expect(copyIdx).toBeGreaterThan(userRootIdx);
+    });
+
+    it("places imageSteps after openclaw install and before entrypoint COPY", () => {
+      const df = renderDockerfile({
+        version: "latest",
+        imageSteps: [{ user: "root", run: "echo custom-step" }],
+      });
+      const openclawIdx = df.indexOf("npm install -g --no-fund --no-audit");
+      const customIdx = df.indexOf("echo custom-step");
+      const copyIdx = df.indexOf("COPY entrypoint.sh");
+      expect(customIdx).toBeGreaterThan(openclawIdx);
+      expect(customIdx).toBeLessThan(copyIdx);
+    });
+
+    it("no imageSteps produces valid Dockerfile without extra USER directives", () => {
+      const df = renderDockerfile(defaultOpts);
+      // Should not have a bare "USER root" right before COPY (only from standard flow)
+      expect(df).not.toContain("USER root\n\nCOPY entrypoint.sh");
+    });
   });
 });
 
@@ -381,6 +384,145 @@ describe("renderEntrypoint", () => {
     it("only processes mappings when env var is set", () => {
       // Should be conditional on OPENCLAW_TCP_MAPPINGS being non-empty
       expect(ep).toContain("${OPENCLAW_TCP_MAPPINGS:-}");
+    });
+
+    it("has || true on getent ahostsv4 pipeline for TCP mappings", () => {
+      // The RESOLVED_IP line must have || true to prevent pipefail from killing the script
+      const tcpSection = ep.substring(
+        ep.indexOf("OPENCLAW_TCP_MAPPINGS"),
+        ep.indexOf("OPENCLAW_UDP_MAPPINGS"),
+      );
+      expect(tcpSection).toContain(
+        'getent ahostsv4 "$DST" 2>/dev/null | head -1 | awk \'{print $1}\')" || true',
+      );
+    });
+  });
+
+  describe("UDP mappings", () => {
+    it("contains OPENCLAW_UDP_MAPPINGS env var reference", () => {
+      expect(ep).toContain("OPENCLAW_UDP_MAPPINGS");
+    });
+
+    it("parses semicolon-delimited UDP entries with pipe field separator", () => {
+      expect(ep).toContain("UDP_ENTRIES");
+    });
+
+    it("resolves UDP domains via getent ahostsv4", () => {
+      // Both TCP and UDP sections use getent ahostsv4 for domain resolution
+      const matches = ep.match(/getent ahostsv4/g);
+      expect(matches!.length).toBeGreaterThanOrEqual(4); // 2 per mapping type (resolve + validate)
+    });
+
+    it("per-destination UDP DNAT rules appear before TCP catch-all", () => {
+      const udpMappingIdx = ep.indexOf("OPENCLAW_UDP_MAPPINGS");
+      const catchAllIdx = ep.indexOf(
+        `--to-destination "$ENVOY_IP":${ENVOY_EGRESS_PORT}`,
+      );
+      expect(udpMappingIdx).toBeGreaterThan(-1);
+      expect(catchAllIdx).toBeGreaterThan(-1);
+      expect(udpMappingIdx).toBeLessThan(catchAllIdx);
+    });
+
+    it("uses -p udp for UDP DNAT rules", () => {
+      expect(ep).toContain("iptables -t nat -A OUTPUT -p udp");
+    });
+
+    it("warns on malformed UDP entries", () => {
+      expect(ep).toContain("malformed UDP mapping");
+    });
+
+    it("only processes UDP mappings when env var is set", () => {
+      expect(ep).toContain("${OPENCLAW_UDP_MAPPINGS:-}");
+    });
+
+    it("has || true on getent ahostsv4 pipeline for UDP mappings", () => {
+      const udpSection = ep.substring(ep.indexOf("OPENCLAW_UDP_MAPPINGS"));
+      expect(udpSection).toContain(
+        'getent ahostsv4 "$DST" 2>/dev/null | head -1 | awk \'{print $1}\')" || true',
+      );
+    });
+  });
+
+  describe("Tailscale daemon startup", () => {
+    it("always starts tailscaled (no conditional)", () => {
+      expect(ep).toContain("tailscaled --tun=userspace-networking");
+      // Should NOT have if [ -d "/var/lib/tailscale" ] guarding tailscaled
+      expect(ep).not.toContain('if [ -d "/var/lib/tailscale" ]');
+    });
+
+    it("uses userspace networking (no TUN device needed)", () => {
+      expect(ep).toContain("--tun=userspace-networking");
+    });
+
+    it("waits for daemon to be ready", () => {
+      expect(ep).toContain("seq 1 30");
+      expect(ep).toContain(
+        "tailscale --socket=/var/run/tailscale/tailscaled.sock status",
+      );
+    });
+
+    it("authenticates with TAILSCALE_AUTHKEY and --ssh flag", () => {
+      expect(ep).toContain("${TAILSCALE_AUTHKEY:-}");
+      expect(ep).toContain(
+        'tailscale --socket=/var/run/tailscale/tailscaled.sock up --authkey="$TAILSCALE_AUTHKEY" --ssh',
+      );
+    });
+
+    it("sets --ssh and --operator=node after auth", () => {
+      expect(ep).toContain(
+        "tailscale --socket=/var/run/tailscale/tailscaled.sock set --ssh --operator=node",
+      );
+    });
+
+    it("runs tailscaled AFTER iptables setup", () => {
+      const iptablesIdx = ep.indexOf("iptables -P OUTPUT DROP");
+      const tailscaledIdx = ep.indexOf("tailscaled --tun=userspace-networking");
+      expect(iptablesIdx).toBeGreaterThan(-1);
+      expect(tailscaledIdx).toBeGreaterThan(-1);
+      expect(tailscaledIdx).toBeGreaterThan(iptablesIdx);
+    });
+
+    it("runs tailscaled BEFORE exec gosu node", () => {
+      const tailscaledIdx = ep.indexOf("tailscaled --tun=userspace-networking");
+      const gosuIdx = ep.indexOf('exec gosu node "$@"');
+      expect(tailscaledIdx).toBeGreaterThan(-1);
+      expect(gosuIdx).toBeGreaterThan(-1);
+      expect(tailscaledIdx).toBeLessThan(gosuIdx);
+    });
+  });
+
+  describe("web tools", () => {
+    it("starts ttyd on loopback", () => {
+      expect(ep).toContain(
+        `gosu node ttyd --port ${TTYD_PORT} --interface lo --writable bash`,
+      );
+    });
+
+    it("starts filebrowser on loopback", () => {
+      expect(ep).toContain(
+        `gosu node filebrowser --address 127.0.0.1 --port ${FILEBROWSER_PORT} --noauth --root /home/node --baseurl /files`,
+      );
+    });
+
+    it("configures tailscale serve paths for web tools", () => {
+      expect(ep).toContain(`serve --bg --set-path /shell ${TTYD_PORT}`);
+      expect(ep).toContain(`serve --bg --set-path /files ${FILEBROWSER_PORT}`);
+    });
+
+    it("web tools start AFTER tailscale", () => {
+      const tailscaleSetIdx = ep.indexOf("set --ssh --operator=node");
+      const ttydIdx = ep.indexOf("gosu node ttyd");
+      expect(tailscaleSetIdx).toBeGreaterThan(-1);
+      expect(ttydIdx).toBeGreaterThan(-1);
+      expect(ttydIdx).toBeGreaterThan(tailscaleSetIdx);
+    });
+
+    it("web tools start BEFORE exec gosu node", () => {
+      const ttydIdx = ep.indexOf("gosu node ttyd");
+      const gosuIdx = ep.indexOf('exec gosu node "$@"');
+      expect(ttydIdx).toBeGreaterThan(-1);
+      expect(gosuIdx).toBeGreaterThan(-1);
+      expect(ttydIdx).toBeLessThan(gosuIdx);
     });
   });
 

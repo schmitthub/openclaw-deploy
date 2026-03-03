@@ -1,0 +1,4 @@
+data/
+.env
+docker-compose.sandbox.yml
+docker-compose.extra.yml

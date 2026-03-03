@@ -4,29 +4,22 @@ import {
   DEFAULT_OPENCLAW_CONFIG_DIR,
   DEFAULT_OPENCLAW_WORKSPACE_DIR,
   DEFAULT_GATEWAY_PORT,
-  DEFAULT_BRIDGE_PORT,
-  DEFAULT_GATEWAY_BIND,
 } from "../config/defaults";
+import type { ImageStep } from "../config/types";
 
 export interface DockerfileOpts {
   version: string;
-  packages?: string[];
   installBrowser?: boolean;
   configDir?: string;
   workspaceDir?: string;
   gatewayPort?: number;
-  bridgePort?: number;
-  gatewayBind?: string;
+  imageSteps?: ImageStep[];
 }
 
 export function renderDockerfile(opts: DockerfileOpts): string {
   const configDir = opts.configDir ?? DEFAULT_OPENCLAW_CONFIG_DIR;
   const workspaceDir = opts.workspaceDir ?? DEFAULT_OPENCLAW_WORKSPACE_DIR;
   const gatewayPort = opts.gatewayPort ?? DEFAULT_GATEWAY_PORT;
-  const bridgePort = opts.bridgePort ?? DEFAULT_BRIDGE_PORT;
-  const gatewayBind = opts.gatewayBind ?? DEFAULT_GATEWAY_BIND;
-
-  const extraPackages = (opts.packages ?? []).join(" ");
 
   return `#
 # NOTE: THIS DOCKERFILE IS GENERATED VIA "openclaw-deploy"
@@ -36,11 +29,9 @@ export function renderDockerfile(opts: DockerfileOpts): string {
 
 FROM ${DOCKER_BASE_IMAGE}
 
-ARG OPENCLAW_DOCKER_APT_PACKAGES="${extraPackages}"
 RUN apt-get update && \\
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
-      ${CORE_APT_PACKAGES.join(" ")} \\
-      $OPENCLAW_DOCKER_APT_PACKAGES && \\
+      ${CORE_APT_PACKAGES.join(" ")} && \\
     apt-get clean && \\
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
@@ -70,6 +61,15 @@ USER node
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 USER root
 
+# Install Tailscale (used for gateway ingress via tailscale serve/funnel).
+RUN curl -fsSL https://tailscale.com/install.sh | sh
+
+# Install ttyd (web terminal) and filebrowser (web file manager).
+RUN TTYD_ARCH=$(uname -m) && \\
+    curl -fsSL "https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.\${TTYD_ARCH}" -o /usr/local/bin/ttyd && \\
+    chmod 755 /usr/local/bin/ttyd && \\
+    curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
+
 WORKDIR /app
 RUN chown node:node /app
 
@@ -77,8 +77,6 @@ ENV OPENCLAW_VERSION=${opts.version}
 ENV OPENCLAW_CONFIG_DIR=${configDir}
 ENV OPENCLAW_WORKSPACE_DIR=${workspaceDir}
 ENV OPENCLAW_GATEWAY_PORT=${gatewayPort}
-ENV OPENCLAW_BRIDGE_PORT=${bridgePort}
-ENV OPENCLAW_GATEWAY_BIND=${gatewayBind}
 
 # Create config and workspace directories
 RUN mkdir -p "\${OPENCLAW_CONFIG_DIR}" "\${OPENCLAW_WORKSPACE_DIR}" && \\
@@ -96,7 +94,7 @@ RUN ln -sf "$(npm root -g)/openclaw/dist/entry.js" /usr/local/bin/openclaw && \\
 # Optional: bake Playwright + Chromium into the image for browser automation.
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 ${renderBrowserBlock(opts.installBrowser ?? false)}
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+${renderImageSteps(opts.imageSteps ?? [])}COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh
 
 # Force pnpm for package operations (Bun may fail on ARM/Synology architectures).
@@ -104,7 +102,7 @@ ENV OPENCLAW_PREFER_PNPM=1
 ENV NODE_ENV=production
 
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["openclaw", "gateway", "--allow-unconfigured"]
+CMD ["openclaw", "gateway", "--port", "${gatewayPort}"]
 `;
 }
 
@@ -123,4 +121,11 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \\
     fi
 
 `;
+}
+
+function renderImageSteps(steps: ImageStep[]): string {
+  if (steps.length === 0) return "";
+  const lines = steps.map((s) => `USER ${s.user}\nRUN ${s.run}`);
+  // Ensure we return to root after imageSteps for entrypoint COPY
+  return lines.join("\n") + "\nUSER root\n\n";
 }

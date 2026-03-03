@@ -6,10 +6,12 @@ import {
   INFRASTRUCTURE_DOMAINS,
   AI_PROVIDER_DOMAINS,
   HOMEBREW_DOMAINS,
+  TAILSCALE_TLS_DOMAINS,
 } from "../config/domains";
 import {
   ENVOY_EGRESS_PORT,
   ENVOY_TCP_PORT_BASE,
+  ENVOY_UDP_PORT_BASE,
   ENVOY_DNS_PORT,
   CLOUDFLARE_DNS_PRIMARY,
   CLOUDFLARE_DNS_SECONDARY,
@@ -46,11 +48,25 @@ describe("renderEnvoyConfig", () => {
       }
     });
 
-    it("contains every hardcoded domain in server_names list", () => {
+    it("contains every hardcoded TLS domain in server_names list", () => {
       const { yaml } = renderEnvoyConfig();
-      for (const rule of HARDCODED_EGRESS_RULES) {
+      for (const rule of HARDCODED_EGRESS_RULES.filter(
+        (r) => r.proto === "tls",
+      )) {
         expect(yaml).toContain(`"${rule.dst}"`);
       }
+    });
+
+    it("contains all hardcoded Tailscale TLS domains", () => {
+      const { yaml } = renderEnvoyConfig();
+      for (const rule of TAILSCALE_TLS_DOMAINS) {
+        expect(yaml).toContain(`"${rule.dst}"`);
+      }
+    });
+
+    it("does not contain *.tailscale.com wildcard", () => {
+      const { yaml } = renderEnvoyConfig();
+      expect(yaml).not.toContain('"*.tailscale.com"');
     });
   });
 
@@ -326,13 +342,13 @@ describe("renderEnvoyConfig", () => {
       expect(yaml).toContain("tcp_db_example_com_5432");
     });
 
-    it("uses STRICT_DNS cluster with AUTO lookup for domain destinations", () => {
+    it("uses STRICT_DNS cluster with V4_PREFERRED lookup for domain destinations", () => {
       const userRules: EgressRule[] = [
         { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
       ];
       const { yaml } = renderEnvoyConfig(userRules);
       expect(yaml).toContain("type: STRICT_DNS");
-      expect(yaml).toContain("dns_lookup_family: AUTO");
+      expect(yaml).toContain("dns_lookup_family: V4_PREFERRED");
       expect(yaml).toContain(`address: "${CLOUDFLARE_DNS_PRIMARY}"`);
     });
 
@@ -426,6 +442,16 @@ describe("renderEnvoyConfig", () => {
       expect(tcpPortMappings).toHaveLength(0);
     });
 
+    it("returns 28 hardcoded UDP port mappings for default config", () => {
+      const { udpPortMappings } = renderEnvoyConfig();
+      expect(udpPortMappings).toHaveLength(28);
+      // All are DERP relays on STUN port 3478
+      for (const m of udpPortMappings) {
+        expect(m.dst).toMatch(/^derp\d+\.tailscale\.com$/);
+        expect(m.dstPort).toBe(3478);
+      }
+    });
+
     it("TCP listeners appear after DNS listener in YAML", () => {
       const userRules: EgressRule[] = [
         { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
@@ -447,8 +473,8 @@ describe("renderEnvoyConfig", () => {
       const clustersSection = yaml.split(/\n {2}clusters:\n/)[1];
       expect(clustersSection).toBeDefined();
       const clusterEntries = clustersSection!.match(/^ {2}- name:/gm);
-      // 2 base (dynamic_forward_proxy + deny) + 2 TCP = 4
-      expect(clusterEntries).toHaveLength(4);
+      // 2 base (dynamic_forward_proxy + deny) + 28 UDP DERP + 2 TCP = 32
+      expect(clusterEntries).toHaveLength(2 + 28 + 2);
     });
 
     it("preserves correct mapping metadata", () => {
@@ -476,6 +502,98 @@ describe("renderEnvoyConfig", () => {
     });
   });
 
+  describe("UDP egress", () => {
+    it("assigns sequential ports starting from ENVOY_UDP_PORT_BASE", () => {
+      const userRules: EgressRule[] = [
+        { dst: "stun.example.com", proto: "udp", port: 3478, action: "allow" },
+        { dst: "stun2.example.com", proto: "udp", port: 3478, action: "allow" },
+      ];
+      const { udpPortMappings } = renderEnvoyConfig(userRules);
+      // 28 hardcoded DERP + 2 user = 30
+      expect(udpPortMappings).toHaveLength(30);
+      // User rules come after hardcoded
+      const lastTwo = udpPortMappings.slice(-2);
+      expect(lastTwo[0].envoyPort).toBe(ENVOY_UDP_PORT_BASE + 28);
+      expect(lastTwo[1].envoyPort).toBe(ENVOY_UDP_PORT_BASE + 29);
+    });
+
+    it("creates dedicated UDP proxy listener per rule", () => {
+      const { yaml } = renderEnvoyConfig();
+      // Check first DERP listener exists
+      expect(yaml).toContain("udp_derp1_tailscale_com_3478");
+      expect(yaml).toContain(`port_value: ${ENVOY_UDP_PORT_BASE}`);
+      expect(yaml).toContain(
+        "envoy.extensions.filters.udp.udp_proxy.v3.UdpProxyConfig",
+      );
+    });
+
+    it("uses STRICT_DNS cluster for domain UDP destinations", () => {
+      const { yaml } = renderEnvoyConfig();
+      // DERP clusters should use STRICT_DNS
+      const clustersSection = yaml.split(/\n {2}clusters:\n/)[1]!;
+      const derpClusterIdx = clustersSection.indexOf(
+        "udp_udp_derp1_tailscale_com_3478",
+      );
+      expect(derpClusterIdx).toBeGreaterThan(-1);
+      const derpCluster = clustersSection.substring(derpClusterIdx);
+      expect(derpCluster).toContain("type: STRICT_DNS");
+      expect(derpCluster).toContain("protocol: UDP");
+    });
+
+    it("uses STATIC cluster for IPv4 UDP destinations", () => {
+      const userRules: EgressRule[] = [
+        { dst: "1.2.3.4", proto: "udp", port: 3478, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      const clustersSection = yaml.split(/\n {2}clusters:\n/)[1]!;
+      const udpClusterIdx = clustersSection.indexOf("udp_udp_1_2_3_4_3478");
+      expect(udpClusterIdx).toBeGreaterThan(-1);
+      const udpCluster = clustersSection.substring(udpClusterIdx);
+      expect(udpCluster).toContain("type: STATIC");
+      expect(udpCluster).toContain('"1.2.3.4"');
+    });
+
+    it("warns for CIDR UDP destinations", () => {
+      const userRules: EgressRule[] = [
+        { dst: "10.0.0.0/24", proto: "udp", port: 3478, action: "allow" },
+      ];
+      const { warnings, udpPortMappings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("CIDR");
+      // Hardcoded DERP mappings still present
+      expect(udpPortMappings).toHaveLength(28);
+    });
+
+    it("warns for UDP rules missing port", () => {
+      const userRules: EgressRule[] = [
+        { dst: "stun.example.com", proto: "udp", action: "allow" },
+      ];
+      const { warnings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("missing required port");
+    });
+
+    it("deny UDP rules produce no listener or mapping", () => {
+      const userRules: EgressRule[] = [
+        { dst: "evil.com", proto: "udp", port: 3478, action: "deny" },
+      ];
+      const { yaml, udpPortMappings, warnings } = renderEnvoyConfig(userRules);
+      expect(warnings).toHaveLength(0);
+      // Only hardcoded DERP mappings
+      expect(udpPortMappings).toHaveLength(28);
+      expect(yaml).not.toContain("udp_evil_com");
+    });
+
+    it("preserves correct UDP mapping metadata", () => {
+      const { udpPortMappings } = renderEnvoyConfig();
+      expect(udpPortMappings[0]).toEqual({
+        dst: "derp1.tailscale.com",
+        dstPort: 3478,
+        envoyPort: ENVOY_UDP_PORT_BASE,
+      });
+    });
+  });
+
   describe("stress and edge cases", () => {
     it("handles 50+ user domains and produces valid config", () => {
       const manyRules: EgressRule[] = Array.from({ length: 55 }, (_, i) => ({
@@ -489,8 +607,10 @@ describe("renderEnvoyConfig", () => {
       for (let i = 0; i < 55; i++) {
         expect(yaml).toContain(`"domain-${i}.example.com"`);
       }
-      // All hardcoded domains still present
-      for (const rule of HARDCODED_EGRESS_RULES) {
+      // All hardcoded TLS domains still present in server_names
+      for (const rule of HARDCODED_EGRESS_RULES.filter(
+        (r) => r.proto === "tls",
+      )) {
         expect(yaml).toContain(`"${rule.dst}"`);
       }
       // Still has correct structure
@@ -518,8 +638,10 @@ describe("renderEnvoyConfig", () => {
       expect(warnings).toHaveLength(0);
       expect(yaml).toContain("static_resources:");
       expect(yaml).toContain("server_names:");
-      // Hardcoded domains are present
-      for (const rule of HARDCODED_EGRESS_RULES) {
+      // Hardcoded TLS domains are present in server_names
+      for (const rule of HARDCODED_EGRESS_RULES.filter(
+        (r) => r.proto === "tls",
+      )) {
         expect(yaml).toContain(`"${rule.dst}"`);
       }
     });
@@ -541,24 +663,25 @@ describe("renderEnvoyConfig", () => {
       expect(yaml).toMatch(/^# Generated by openclaw-deploy/);
     });
 
-    it("has exactly two listeners when no SSH/TCP rules (egress and dns)", () => {
+    it("has egress, dns, and hardcoded UDP listeners", () => {
       const { yaml } = renderEnvoyConfig();
-      const listenerMatches = yaml.match(/- name: (egress|dns)/g);
-      expect(listenerMatches).toHaveLength(2);
-      expect(listenerMatches).toContain("- name: egress");
-      expect(listenerMatches).toContain("- name: dns");
+      expect(yaml).toContain("- name: egress");
+      expect(yaml).toContain("- name: dns");
+      // 28 hardcoded DERP UDP listeners
+      for (let i = 1; i <= 28; i++) {
+        expect(yaml).toContain(`udp_derp${i}_tailscale_com_3478`);
+      }
     });
 
-    it("has exactly two clusters when no SSH/TCP rules", () => {
+    it("has base clusters plus hardcoded UDP clusters", () => {
       const { yaml } = renderEnvoyConfig();
-      // Extract the clusters section and count entries
       const clustersSection = yaml.split(/\n {2}clusters:\n/)[1];
       expect(clustersSection).toBeDefined();
       expect(clustersSection).toContain("name: dynamic_forward_proxy_cluster");
       expect(clustersSection).toContain("name: deny_cluster");
-      // Count cluster definitions (indented "- name:" entries within clusters section)
+      // Count cluster definitions: 2 base + 28 UDP DERP
       const clusterEntries = clustersSection!.match(/^ {2}- name:/gm);
-      expect(clusterEntries).toHaveLength(2);
+      expect(clusterEntries).toHaveLength(2 + 28);
     });
 
     it("contains static_resources top-level key", () => {
@@ -757,7 +880,7 @@ describe("renderEnvoyConfig", () => {
       expect(adminIdx).toBeLessThan(catchAllIdx);
     });
 
-    it("has exactly three clusters when inspect rules exist", () => {
+    it("has base + MITM + UDP clusters when inspect rules exist", () => {
       const rules: EgressRule[] = [
         { dst: "x.com", proto: "tls", action: "allow", inspect: true },
       ];
@@ -765,7 +888,8 @@ describe("renderEnvoyConfig", () => {
       const clustersSection = yaml.split(/\n {2}clusters:\n/)[1];
       expect(clustersSection).toBeDefined();
       const clusterEntries = clustersSection!.match(/^ {2}- name:/gm);
-      expect(clusterEntries).toHaveLength(3);
+      // 2 base + 1 MITM + 28 UDP = 31
+      expect(clusterEntries).toHaveLength(2 + 1 + 28);
     });
 
     it("MITM filter chain has http_connection_manager with dynamic_forward_proxy", () => {

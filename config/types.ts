@@ -7,7 +7,7 @@ export interface PathRule {
 
 export interface EgressRule {
   dst: string; // domain "x.com" | IPv4 "140.82.121.4" | IPv6 "2001:db8::1" | CIDR "10.0.0.0/24"
-  proto: "tls" | "ssh" | "tcp"; // tls: SNI-based passthrough or MITM inspection; ssh/tcp: per-rule Envoy port mapping
+  proto: "tls" | "ssh" | "tcp" | "udp"; // tls: SNI-based passthrough or MITM inspection; ssh/tcp/udp: per-rule Envoy port mapping
   port?: number; // required for ssh/tcp, optional for tls (default 443)
   action: "allow" | "deny";
   inspect?: boolean; // MITM TLS termination for path-level rules
@@ -18,19 +18,20 @@ export interface EgressRule {
 import { PROVIDERS } from "./defaults";
 export type VpsProvider = (typeof PROVIDERS)[number];
 
-// Tailscale mode per gateway
-export type TailscaleMode = "serve" | "funnel" | "off";
+// Custom Dockerfile RUN instructions (placed after openclaw install, before entrypoint COPY)
+export interface ImageStep {
+  user: "root" | "node";
+  run: string;
+}
 
 // Gateway configuration
 export interface GatewayConfig {
   profile: string; // unique name for this gateway instance
   version: string; // openclaw version (npm dist-tag or semver)
-  packages: string[]; // apt packages to bake into image
-  port: number; // host port (maps to 18789 inside container)
-  bridgePort?: number; // bridge port (defaults 18790)
-  tailscale: TailscaleMode;
+  port: number; // gateway port inside container
   installBrowser?: boolean; // bake Playwright + Chromium (~300MB)
-  configSet: Record<string, string>; // openclaw config set key=value pairs
+  imageSteps?: ImageStep[]; // custom Dockerfile RUN instructions
+  setupCommands?: string[]; // openclaw subcommands run in init container (e.g. 'onboard ...')
   env?: Record<string, string>; // additional env vars for container
 }
 
@@ -46,13 +47,23 @@ export interface TcpPortMapping {
   envoyPort: number;
 }
 
+// Per-rule port mapping for UDP egress (passed to gateway containers)
+export interface UdpPortMapping {
+  /** Destination domain or IP */
+  dst: string;
+  /** Destination port (e.g. 3478 for STUN) */
+  dstPort: number;
+  /** Dedicated Envoy listener port for this mapping */
+  envoyPort: number;
+}
+
 // Full stack configuration
 export interface StackConfig {
   // VPS
   provider: VpsProvider;
   serverType: string; // e.g. "cx22" (Hetzner), "s-1vcpu-1gb" (DO), "VM.Standard.A1.Flex" (OCI)
-  region: string; // e.g. "fsn1" (Hetzner), "nyc1" (DO), availability domain (OCI)
-  sshKeyId: string; // provider-specific SSH key ID or fingerprint
+  region?: string; // Required for Hetzner/DO. Oracle auto-discovers availability domain if omitted.
+  sshKeyId?: string; // provider-specific SSH key ID or fingerprint (auto-generated if omitted)
 
   // Tailscale
   tailscaleAuthKey: string; // secret: one-time auth key

@@ -1,0 +1,105 @@
+# Mirrors the VPS deployment topology:
+#   - internal network (internal: true, no default internet route)
+#   - egress network (Envoy's internet path)
+#   - Envoy on both networks (sole bridge, SNI whitelist, DNS forwarder)
+#   - Gateway on internal only (entrypoint adds route via Envoy, sets iptables)
+#   - Tailscale inside gateway container (serve mode, userspace networking)
+#   - CLI service for running config/onboard commands (standalone, no network dep)
+
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.33-latest
+    restart: unless-stopped
+    sysctls:
+      - net.ipv4.ip_unprivileged_port_start=53
+    networks:
+      openclaw-internal:
+        ipv4_address: 172.28.0.2
+      openclaw-egress: {}
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/10000"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  openclaw-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openclaw-gateway:local
+    cap_add:
+      - NET_ADMIN
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_USER_ID: ${DISCORD_USER_ID:-}
+      DISCORD_SERVER_ID: ${DISCORD_SERVER_ID:-}
+      TAILSCALE_AUTHKEY: ${TAILSCALE_DEVICE_KEY:-}
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      OPENCLAW_UDP_MAPPINGS: "derp1.tailscale.com|3478|10100;derp2.tailscale.com|3478|10101;derp3.tailscale.com|3478|10102;derp4.tailscale.com|3478|10103;derp5.tailscale.com|3478|10104;derp6.tailscale.com|3478|10105;derp7.tailscale.com|3478|10106;derp8.tailscale.com|3478|10107;derp9.tailscale.com|3478|10108;derp10.tailscale.com|3478|10109;derp11.tailscale.com|3478|10110;derp12.tailscale.com|3478|10111"
+    dns:
+      - 172.28.0.2
+    networks:
+      openclaw-internal: {}
+    init: true
+    restart: unless-stopped
+    command: ["openclaw", "gateway", "--tailscale", "serve", "--port", "18789"]
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-./data/config}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./data/workspace}:/home/node/.openclaw/workspace
+      - ./data/tailscale:/var/lib/tailscale
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      envoy:
+        condition: service_healthy
+
+  # Standalone CLI for running config/onboard commands against shared volumes.
+  # No network dependency on gateway — runs independently.
+  openclaw-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openclaw-gateway:local
+    network_mode: none
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      BROWSER: echo
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-./data/config}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./data/workspace}:/home/node/.openclaw/workspace
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["openclaw"]
+    profiles:
+      - cli
+
+networks:
+  openclaw-internal:
+    internal: true
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+  openclaw-egress:
+    driver: bridge

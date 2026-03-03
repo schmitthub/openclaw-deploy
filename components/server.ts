@@ -2,22 +2,24 @@ import * as pulumi from "@pulumi/pulumi";
 import * as hcloud from "@pulumi/hcloud";
 import * as digitalocean from "@pulumi/digitalocean";
 import * as oci from "@pulumi/oci";
+import * as tls from "@pulumi/tls";
 import { VpsProvider } from "../config";
 import {
   OCI_ARM_SHAPE_PREFIX,
   OCI_DEFAULT_OCPUS,
   OCI_DEFAULT_MEMORY_GBS,
 } from "../config/defaults";
+import { OciInfra } from "./oci-infra";
 
 export interface ServerArgs {
   provider: VpsProvider;
   serverType: pulumi.Input<string>; // e.g. "cx22" (Hetzner), "s-1vcpu-1gb" (DO), "VM.Standard.A1.Flex" (OCI)
-  region: pulumi.Input<string>; // e.g. "fsn1" (Hetzner), "nyc1" (DO), availability domain for OCI
-  sshKeyId: pulumi.Input<string>; // Key ID (Hetzner), fingerprint (DO), or SSH public key content (OCI)
-  image?: pulumi.Input<string>; // e.g. "ubuntu-24.04" (Hetzner), "ubuntu-24-04-x64" (DO), image OCID (OCI)
-  // OCI-specific (required when provider === "oracle")
-  compartmentId?: pulumi.Input<string>; // OCI compartment OCID
-  subnetId?: pulumi.Input<string>; // OCI subnet OCID (must allow public IP assignment)
+  region?: pulumi.Input<string>; // Required for Hetzner/DO. Oracle auto-discovers availability domain if omitted.
+  sshKeyId?: pulumi.Input<string>; // Key ID (Hetzner), fingerprint (DO), or SSH public key content (OCI). Auto-generated if omitted.
+  image?: pulumi.Input<string>; // e.g. "ubuntu-24.04" (Hetzner), "ubuntu-24-04-x64" (DO), image OCID (OCI). Oracle auto-discovers if omitted.
+  // OCI-specific
+  compartmentId?: pulumi.Input<string>; // OCI compartment OCID (required for Oracle)
+  subnetId?: pulumi.Input<string>; // OCI subnet OCID. Auto-creates VCN + networking if omitted.
   ocpus?: pulumi.Input<number>; // OCI flex shape: CPU count (default: 2)
   memoryInGbs?: pulumi.Input<number>; // OCI flex shape: memory in GB (default: 12)
 }
@@ -25,7 +27,11 @@ export interface ServerArgs {
 export class Server extends pulumi.ComponentResource {
   public readonly ipAddress: pulumi.Output<string>;
   public readonly arch: pulumi.Output<string>; // "amd64" or "arm64"
-  public readonly connection: pulumi.Output<{ host: string; user: string }>;
+  public readonly connection: pulumi.Output<{
+    host: string;
+    user: string;
+    privateKey?: string;
+  }>;
   public readonly dockerHost: pulumi.Output<string>; // "ssh://root@<ip>"
 
   constructor(
@@ -35,8 +41,41 @@ export class Server extends pulumi.ComponentResource {
   ) {
     super("openclaw:infra:Server", name, {}, opts);
 
+    // Auto-generate SSH key pair when sshKeyId is not provided
+    let generatedKey: tls.PrivateKey | undefined;
+    if (args.sshKeyId === undefined) {
+      generatedKey = new tls.PrivateKey(
+        `${name}-ssh-key`,
+        { algorithm: "ED25519" },
+        {
+          parent: this,
+          additionalSecretOutputs: ["privateKeyOpenssh", "privateKeyPem"],
+        },
+      );
+    }
+
     switch (args.provider) {
       case "hetzner": {
+        if (!args.region) {
+          throw new Error('Hetzner provider requires "region" in ServerArgs.');
+        }
+
+        // Resolve SSH key: use provided ID or register generated key
+        let sshKeyRef: pulumi.Input<string>;
+        if (args.sshKeyId !== undefined) {
+          sshKeyRef = args.sshKeyId;
+        } else {
+          const hcloudKey = new hcloud.SshKey(
+            `${name}-ssh-key`,
+            {
+              name: `${name}-auto`,
+              publicKey: generatedKey!.publicKeyOpenssh,
+            },
+            { parent: this },
+          );
+          sshKeyRef = hcloudKey.id;
+        }
+
         const server = new hcloud.Server(
           `${name}-server`,
           {
@@ -44,7 +83,7 @@ export class Server extends pulumi.ComponentResource {
             serverType: args.serverType,
             location: args.region,
             image: args.image ?? "ubuntu-24.04",
-            sshKeys: [args.sshKeyId],
+            sshKeys: [sshKeyRef],
             publicNets: [{ ipv4Enabled: true, ipv6Enabled: true }],
           },
           { parent: this },
@@ -56,10 +95,20 @@ export class Server extends pulumi.ComponentResource {
           .output(args.serverType)
           .apply((st) => (st.startsWith("cax") ? "arm64" : "amd64"));
 
-        this.connection = server.ipv4Address.apply((ip) => ({
-          host: ip,
-          user: "root",
-        }));
+        if (generatedKey) {
+          this.connection = pulumi
+            .all([server.ipv4Address, generatedKey.privateKeyOpenssh])
+            .apply(([ip, pk]) => ({
+              host: ip,
+              user: "root",
+              privateKey: pk,
+            }));
+        } else {
+          this.connection = server.ipv4Address.apply((ip) => ({
+            host: ip,
+            user: "root",
+          }));
+        }
 
         this.dockerHost = server.ipv4Address.apply((ip) => `ssh://root@${ip}`);
 
@@ -67,6 +116,28 @@ export class Server extends pulumi.ComponentResource {
       }
 
       case "digitalocean": {
+        if (!args.region) {
+          throw new Error(
+            'DigitalOcean provider requires "region" in ServerArgs.',
+          );
+        }
+
+        // Resolve SSH key: use provided fingerprint or register generated key
+        let sshKeyRef: pulumi.Input<string>;
+        if (args.sshKeyId !== undefined) {
+          sshKeyRef = args.sshKeyId;
+        } else {
+          const doKey = new digitalocean.SshKey(
+            `${name}-ssh-key`,
+            {
+              name: `${name}-auto`,
+              publicKey: generatedKey!.publicKeyOpenssh,
+            },
+            { parent: this },
+          );
+          sshKeyRef = doKey.fingerprint;
+        }
+
         const droplet = new digitalocean.Droplet(
           `${name}-droplet`,
           {
@@ -74,7 +145,7 @@ export class Server extends pulumi.ComponentResource {
             size: args.serverType, // e.g. "s-1vcpu-1gb", "s-2vcpu-2gb"
             region: args.region, // e.g. "nyc1", "sfo3"
             image: args.image ?? "ubuntu-24-04-x64",
-            sshKeys: [args.sshKeyId],
+            sshKeys: [sshKeyRef],
           },
           { parent: this },
         );
@@ -86,10 +157,20 @@ export class Server extends pulumi.ComponentResource {
           .output(args.serverType)
           .apply((st) => (st.endsWith("-arm") ? "arm64" : "amd64"));
 
-        this.connection = droplet.ipv4Address.apply((ip) => ({
-          host: ip,
-          user: "root",
-        }));
+        if (generatedKey) {
+          this.connection = pulumi
+            .all([droplet.ipv4Address, generatedKey.privateKeyOpenssh])
+            .apply(([ip, pk]) => ({
+              host: ip,
+              user: "root",
+              privateKey: pk,
+            }));
+        } else {
+          this.connection = droplet.ipv4Address.apply((ip) => ({
+            host: ip,
+            user: "root",
+          }));
+        }
 
         this.dockerHost = droplet.ipv4Address.apply((ip) => `ssh://root@${ip}`);
 
@@ -102,14 +183,66 @@ export class Server extends pulumi.ComponentResource {
             'Oracle provider requires "compartmentId" in ServerArgs.',
           );
         }
-        if (!args.subnetId) {
-          throw new Error('Oracle provider requires "subnetId" in ServerArgs.');
-        }
-        if (!args.image) {
-          throw new Error(
-            'Oracle provider requires "image" (Ubuntu image OCID) in ServerArgs.',
+
+        // Auto-discover availability domain (first AD in the provider's region)
+        const availabilityDomain = args.region
+          ? pulumi.output(args.region)
+          : oci.identity
+              .getAvailabilityDomainsOutput({
+                compartmentId: args.compartmentId,
+              })
+              .apply((result) => {
+                if (result.availabilityDomains.length === 0) {
+                  throw new Error(
+                    "No availability domains found. Check OCI region configuration.",
+                  );
+                }
+                return result.availabilityDomains[0].name;
+              });
+
+        // Auto-create VCN + networking when subnetId is not provided
+        let subnetId: pulumi.Input<string>;
+        if (args.subnetId) {
+          subnetId = args.subnetId;
+        } else {
+          const infra = new OciInfra(
+            `${name}-infra`,
+            { compartmentId: args.compartmentId },
+            { parent: this },
           );
+          subnetId = infra.subnetId;
         }
+
+        // Auto-discover Ubuntu 24.04 image when not provided
+        let imageId: pulumi.Input<string>;
+        if (args.image) {
+          imageId = args.image;
+        } else {
+          imageId = oci.core
+            .getImagesOutput({
+              compartmentId: args.compartmentId,
+              operatingSystem: "Canonical Ubuntu",
+              operatingSystemVersion: "24.04",
+              shape: args.serverType,
+              sortBy: "TIMECREATED",
+              sortOrder: "DESC",
+              state: "AVAILABLE",
+            })
+            .apply((result) => {
+              if (result.images.length === 0) {
+                throw new Error(
+                  'No Ubuntu 24.04 image found for shape. Provide "image" OCID explicitly.',
+                );
+              }
+              return result.images[0].id;
+            });
+        }
+
+        // Resolve SSH public key: use provided content or generated key
+        const sshPublicKey =
+          args.sshKeyId !== undefined
+            ? args.sshKeyId
+            : generatedKey!.publicKeyOpenssh;
 
         // OCI Ubuntu images default to "ubuntu" user with root login disabled.
         // Cloud-init enables root SSH to match the Hetzner/DO pattern expected
@@ -132,7 +265,7 @@ export class Server extends pulumi.ComponentResource {
           `${name}-instance`,
           {
             compartmentId: args.compartmentId,
-            availabilityDomain: args.region,
+            availabilityDomain,
             shape: args.serverType,
             shapeConfig: {
               ocpus: args.ocpus ?? OCI_DEFAULT_OCPUS,
@@ -140,14 +273,14 @@ export class Server extends pulumi.ComponentResource {
             },
             sourceDetails: {
               sourceType: "image",
-              sourceId: args.image,
+              sourceId: imageId,
             },
             createVnicDetails: {
-              subnetId: args.subnetId,
+              subnetId,
               assignPublicIp: "true",
             },
             metadata: {
-              ssh_authorized_keys: args.sshKeyId,
+              ssh_authorized_keys: sshPublicKey,
               user_data: Buffer.from(cloudInit).toString("base64"),
             },
             displayName: name,
@@ -189,10 +322,20 @@ export class Server extends pulumi.ComponentResource {
             st.startsWith(OCI_ARM_SHAPE_PREFIX) ? "arm64" : "amd64",
           );
 
-        this.connection = publicIp.apply((ip) => ({
-          host: ip,
-          user: "root",
-        }));
+        if (generatedKey) {
+          this.connection = pulumi
+            .all([publicIp, generatedKey.privateKeyOpenssh])
+            .apply(([ip, pk]) => ({
+              host: ip,
+              user: "root",
+              privateKey: pk,
+            }));
+        } else {
+          this.connection = publicIp.apply((ip) => ({
+            host: ip,
+            user: "root",
+          }));
+        }
 
         this.dockerHost = publicIp.apply((ip) => `ssh://root@${ip}`);
 

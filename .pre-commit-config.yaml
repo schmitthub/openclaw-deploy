@@ -1,0 +1,44 @@
+repos:
+  # Prettier — format TS/JS/JSON/YAML/MD (reads .prettierrc + .prettierignore)
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        entry: npx prettier --write --ignore-unknown
+        language: system
+        types_or: [ts, javascript, json, yaml, markdown]
+
+  # ESLint — lint + autofix TS/JS (uses project eslint.config.mjs)
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: npx eslint --fix
+        language: system
+        types_or: [ts, javascript]
+
+  # Gitleaks — secret scanning (reads .gitleaks.toml)
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  # TypeScript type check
+  - repo: local
+    hooks:
+      - id: typecheck
+        name: typecheck
+        entry: npx tsc --noEmit
+        language: system
+        types: [ts]
+        pass_filenames: false
+
+  # Vitest — run tests
+  - repo: local
+    hooks:
+      - id: vitest
+        name: vitest
+        entry: npx vitest run
+        language: system
+        types: [ts]
+        pass_filenames: false

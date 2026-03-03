@@ -8,8 +8,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "check": "npm run typecheck && npm run lint && npm run test",
-    "prepare": "husky"
+    "check": "npm run typecheck && npm run lint && npm run test"
   },
   "repository": {
     "type": "git",
@@ -24,19 +23,15 @@
     "@pulumi/docker": "^4.11.0",
     "@pulumi/hcloud": "^1.32.1",
     "@pulumi/oci": "^4.1.0",
-    "@pulumi/pulumi": "^3.224.0"
-  },
-  "lint-staged": {
-    "*.{ts,js}": "eslint --fix",
-    "*.{ts,js,json,yaml,yml,md}": "prettier --write"
+    "@pulumi/pulumi": "^3.224.0",
+    "@pulumi/random": "^4.19.1",
+    "@pulumi/tls": "^5.3.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.3.3",
     "eslint": "^10.0.2",
     "eslint-config-prettier": "^10.1.8",
-    "husky": "^9.1.7",
-    "lint-staged": "^16.3.1",
     "prettier": "^3.8.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",

@@ -1,8 +1,14 @@
-import { EgressRule, PathRule, TcpPortMapping } from "../config/types";
+import {
+  EgressRule,
+  PathRule,
+  TcpPortMapping,
+  UdpPortMapping,
+} from "../config/types";
 import { mergeEgressPolicy } from "../config/domains";
 import {
   ENVOY_EGRESS_PORT,
   ENVOY_TCP_PORT_BASE,
+  ENVOY_UDP_PORT_BASE,
   ENVOY_DNS_PORT,
   CLOUDFLARE_DNS_PRIMARY,
   CLOUDFLARE_DNS_SECONDARY,
@@ -17,6 +23,8 @@ export interface EnvoyConfigResult {
   inspectedDomains: string[];
   /** Per-rule port mappings for SSH/TCP egress (passed to gateway entrypoint) */
   tcpPortMappings: TcpPortMapping[];
+  /** Per-rule port mappings for UDP egress (passed to gateway entrypoint) */
+  udpPortMappings: UdpPortMapping[];
 }
 
 interface MitmDomainConfig {
@@ -104,7 +112,7 @@ ${routeEntries}
               "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
               dns_cache_config:
                 name: mitm_forward_proxy_cache
-                dns_lookup_family: AUTO
+                dns_lookup_family: V4_PREFERRED
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router`;
@@ -123,7 +131,7 @@ function renderMitmCluster(): string {
         "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
         dns_cache_config:
           name: mitm_forward_proxy_cache
-          dns_lookup_family: AUTO
+          dns_lookup_family: V4_PREFERRED
     transport_socket:
       name: envoy.transport_sockets.tls
       typed_config:
@@ -182,7 +190,7 @@ function renderTcpCluster(mapping: TcpPortMapping): string {
   - name: ${clusterName}
     type: STRICT_DNS
     connect_timeout: 5s
-    dns_lookup_family: AUTO
+    dns_lookup_family: V4_PREFERRED
     typed_dns_resolver_config:
       name: envoy.network.dns_resolver.cares
       typed_config:
@@ -203,6 +211,85 @@ function renderTcpCluster(mapping: TcpPortMapping): string {
               socket_address:
                 address: "${mapping.dst}"
                 port_value: ${mapping.dstPort}`;
+}
+
+/** Render a dedicated UDP proxy listener for a single UDP egress rule. */
+function renderUdpListener(mapping: UdpPortMapping): string {
+  const safeName = `udp_${mapping.dst.replace(/[.:]/g, "_")}_${mapping.dstPort}`;
+  const clusterName = `udp_${safeName}`;
+  return `
+  # UDP egress: ${mapping.dst}:${mapping.dstPort} → :${mapping.envoyPort}
+  - name: ${safeName}
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: ${mapping.envoyPort}
+        protocol: UDP
+    listener_filters:
+    - name: envoy.filters.udp_listener.udp_proxy
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.filters.udp.udp_proxy.v3.UdpProxyConfig
+        stat_prefix: ${safeName}
+        matcher:
+          on_no_match:
+            action:
+              name: route
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.udp.udp_proxy.v3.Route
+                cluster: ${clusterName}`;
+}
+
+/** Render a STRICT_DNS or STATIC cluster for a single UDP egress rule. */
+function renderUdpCluster(mapping: UdpPortMapping): string {
+  const safeName = `udp_${mapping.dst.replace(/[.:]/g, "_")}_${mapping.dstPort}`;
+  const clusterName = `udp_${safeName}`;
+  const isIpv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(mapping.dst);
+  const isIpv6 = mapping.dst.includes(":");
+  const isIp = isIpv4 || isIpv6;
+
+  if (isIp) {
+    return `
+  - name: ${clusterName}
+    type: STATIC
+    connect_timeout: 5s
+    load_assignment:
+      cluster_name: ${clusterName}
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: "${mapping.dst}"
+                port_value: ${mapping.dstPort}
+                protocol: UDP`;
+  }
+
+  return `
+  - name: ${clusterName}
+    type: STRICT_DNS
+    connect_timeout: 5s
+    dns_lookup_family: V4_PREFERRED
+    typed_dns_resolver_config:
+      name: envoy.network.dns_resolver.cares
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.cares.v3.CaresDnsResolverConfig
+        resolvers:
+        - socket_address:
+            address: "${CLOUDFLARE_DNS_PRIMARY}"
+            port_value: 53
+        - socket_address:
+            address: "${CLOUDFLARE_DNS_SECONDARY}"
+            port_value: 53
+    load_assignment:
+      cluster_name: ${clusterName}
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: "${mapping.dst}"
+                port_value: ${mapping.dstPort}
+                protocol: UDP`;
 }
 
 /**
@@ -227,6 +314,7 @@ export function renderEnvoyConfig(
   const inspectedDomains: string[] = [];
   const mitmConfigs: MitmDomainConfig[] = [];
   const tcpMappings: TcpPortMapping[] = [];
+  const udpMappings: UdpPortMapping[] = [];
 
   for (const rule of merged) {
     if (rule.action === "deny") {
@@ -296,6 +384,48 @@ export function renderEnvoyConfig(
         });
         break;
       }
+
+      case "udp": {
+        if (
+          !DOMAIN_RE.test(rule.dst) &&
+          !IP_RE.test(rule.dst) &&
+          !rule.dst.includes("/") &&
+          !rule.dst.includes(":")
+        ) {
+          warnings.push(`Invalid destination "${rule.dst}" — skipped`);
+          break;
+        }
+        if (rule.dst.includes("/")) {
+          warnings.push(
+            `CIDR destination "${rule.dst}" not supported for UDP egress — use a specific IP or domain`,
+          );
+          break;
+        }
+        if (rule.port === undefined) {
+          warnings.push(
+            `UDP egress rule for "${rule.dst}" missing required port — skipped`,
+          );
+          break;
+        }
+        if (rule.dst.includes(":")) {
+          warnings.push(
+            `IPv6 destination "${rule.dst}" for UDP rule — Envoy listener created but gateway iptables routing is IPv4-only`,
+          );
+        }
+        const udpEnvoyPort = ENVOY_UDP_PORT_BASE + udpMappings.length;
+        udpMappings.push({
+          dst: rule.dst,
+          dstPort: rule.port,
+          envoyPort: udpEnvoyPort,
+        });
+        break;
+      }
+
+      default:
+        warnings.push(
+          `Unknown protocol "${(rule as EgressRule).proto}" for destination "${rule.dst}" — skipped`,
+        );
+        break;
     }
   }
 
@@ -310,6 +440,8 @@ export function renderEnvoyConfig(
 
   const tcpListenerSection = tcpMappings.map(renderTcpListener).join("\n");
   const tcpClusterSection = tcpMappings.map(renderTcpCluster).join("\n");
+  const udpListenerSection = udpMappings.map(renderUdpListener).join("\n");
+  const udpClusterSection = udpMappings.map(renderUdpCluster).join("\n");
 
   const yaml = `# Generated by openclaw-deploy. Do not edit directly.
 #
@@ -346,7 +478,7 @@ ${domainLines}
           port_value: 443
           dns_cache_config:
             name: dynamic_forward_proxy_cache
-            dns_lookup_family: AUTO
+            dns_lookup_family: V4_PREFERRED
       - name: envoy.filters.network.tcp_proxy
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
@@ -392,6 +524,7 @@ ${domainLines}
                   address: "${CLOUDFLARE_DNS_SECONDARY}"
                   port_value: 53
 ${tcpListenerSection}
+${udpListenerSection}
   clusters:
   - name: dynamic_forward_proxy_cluster
     lb_policy: CLUSTER_PROVIDED
@@ -401,9 +534,10 @@ ${tcpListenerSection}
         "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
         dns_cache_config:
           name: dynamic_forward_proxy_cache
-          dns_lookup_family: AUTO
+          dns_lookup_family: V4_PREFERRED
 ${mitmClusterSection}
 ${tcpClusterSection}
+${udpClusterSection}
   - name: deny_cluster
     type: STATIC
     connect_timeout: 0.25s
@@ -411,5 +545,11 @@ ${tcpClusterSection}
       cluster_name: deny_cluster
 `;
 
-  return { yaml, warnings, inspectedDomains, tcpPortMappings: tcpMappings };
+  return {
+    yaml,
+    warnings,
+    inspectedDomains,
+    tcpPortMappings: tcpMappings,
+    udpPortMappings: udpMappings,
+  };
 }

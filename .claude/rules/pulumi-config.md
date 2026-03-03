@@ -12,7 +12,7 @@ config:
   openclaw-deploy:provider: hetzner
   openclaw-deploy:serverType: cx22
   openclaw-deploy:region: fsn1
-  openclaw-deploy:sshKeyId: "12345"
+  # openclaw-deploy:sshKeyId: "12345"  # Optional: auto-generates ED25519 SSH key if omitted
   openclaw-deploy:tailscaleAuthKey:
     secure: <encrypted>
   openclaw-deploy:egressPolicy:
@@ -34,12 +34,15 @@ config:
 ```typescript
 const cfg = new pulumi.Config();
 cfg.require("provider");           // plain string, fails if missing
+cfg.get("sshKeyId");               // optional string (auto-generates SSH key if omitted)
 cfg.requireSecret("tailscaleAuthKey"); // secret string
 cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 ```
 
 ## Secret Handling
-- Secrets: `tailscaleAuthKey`, `gatewayToken-<profile>` — always use `cfg.requireSecret()`
+- Required secret: `tailscaleAuthKey` — use `cfg.requireSecret()`
+- Auto-generated: `gatewayToken-<profile>` — use `cfg.getSecret()` with `random.RandomPassword` fallback (32 chars, stored in Pulumi state)
+- Optional secret: `gatewaySecretEnv-<profile>` — use `cfg.getSecret()` (returns undefined if absent)
 - Remote commands that receive secrets use `logging: "none"` and `additionalSecretOutputs: ["stdout", "stderr"]`
 - Secret values are encrypted in stack config files and never appear in plaintext logs
 
@@ -47,16 +50,16 @@ cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 - Provider validated against `VpsProvider` union at config load time
 - Gateway profile names validated for uniqueness (duplicates cause Pulumi resource name collisions)
 - Egress rules validated during `renderEnvoyConfig()` — unsupported types emit warnings
-- Per-gateway tokens loaded dynamically: `cfg.requireSecret(\`gatewayToken-\${gw.profile}\`)`
+- Per-gateway tokens auto-generated via `random.RandomPassword`, manual override via `cfg.getSecret(\`gatewayToken-\${gw.profile}\`)`
 
 ## Component Argument Patterns
 Components accept typed args interfaces:
-- `ServerArgs`: provider, serverType, region, sshKeyId, image?
-- `HostBootstrapArgs`: connection, tailscaleAuthKey
+- `ServerArgs`: provider, serverType, region, sshKeyId?, image?
+- `HostBootstrapArgs`: connection
 - `EnvoyEgressArgs`: dockerHost, connection, egressPolicy
-- `GatewayArgs`: dockerHost, connection, internalNetworkName, profile, version, packages, port, tailscale, auth, configSet, env?
+- `GatewayArgs`: dockerHost, connection, internalNetworkName, profile, version, packages, port, tailscale, auth, configSet, setupCommands?, env?, secretEnv?, tcpPortMappings?, udpPortMappings?, tailscaleAuthKey?
 
 Security-critical gateway config keys (`gateway.mode`, `gateway.auth.*`, `gateway.trustedProxies`, `discovery.mdns.mode`) are set by the component and **cannot be overridden** by user `configSet`.
 
-## Connection Switching
-After `HostBootstrap` completes, all subsequent components (`EnvoyEgress`, `Gateway`) use the **Tailscale IP** for SSH commands, not the original public IP. This is because the public IP may be firewalled once Tailscale is up. The connection is derived in `index.ts` via `bootstrap.tailscaleIP.apply()`.
+## Connection Model
+All components use the **public IP** from `server.connection` for SSH commands. Tailscale runs inside gateway containers (not on the host), so there is no Tailscale IP switching. The `tailscaleAuthKey` is passed to `Gateway` which injects it as the `TAILSCALE_AUTHKEY` env var. Reusable auth keys are recommended for multi-gateway setups.
