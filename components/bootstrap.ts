@@ -49,9 +49,21 @@ export class HostBootstrap extends pulumi.ComponentResource {
     const setupSsh = new command.local.Command(
       `${name}-setup-ssh`,
       {
-        create: pulumi.interpolate`
+        create: pulumi.interpolate`set -euo pipefail
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
-ssh-keyscan -H ${hostIp} >> ~/.ssh/known_hosts 2>/dev/null
+KEYSCAN_OK=false
+for i in 1 2 3 4 5; do
+  if ssh-keyscan -H ${hostIp} >> ~/.ssh/known_hosts 2>/dev/null && grep -q "${hostIp}" ~/.ssh/known_hosts 2>/dev/null; then
+    KEYSCAN_OK=true
+    break
+  fi
+  echo "ssh-keyscan attempt $i failed, retrying in 10s..." >&2
+  sleep 10
+done
+if [ "$KEYSCAN_OK" != "true" ]; then
+  echo "ERROR: ssh-keyscan failed after 5 attempts for ${hostIp}" >&2
+  exit 1
+fi
 KEY="${privateKey}"
 if [ -n "$KEY" ]; then
   KEYFILE=~/.ssh/openclaw-deploy-${name}

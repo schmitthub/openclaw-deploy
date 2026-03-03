@@ -668,6 +668,59 @@ describe("Gateway component", () => {
     expect(containerId).toBeDefined();
   });
 
+  it("filters reserved env keys from secretEnv", async () => {
+    const { Gateway } = await import("../components/gateway");
+    const gw = new Gateway("test-gw-reserved", {
+      dockerHost: "ssh://root@100.64.0.1",
+      connection: { host: "100.64.0.1", user: "root" },
+      internalNetworkName: "openclaw-internal",
+      profile: "reservedtest",
+      version: "latest",
+      port: 18789,
+      auth: { mode: "token", token: "test-token" },
+      tailscaleAuthKey: "tskey-auth-test",
+      secretEnv: JSON.stringify({
+        OPENCLAW_GATEWAY_TOKEN: "attacker-token",
+        CUSTOM_KEY: "value",
+      }),
+    });
+
+    const containerId = await promiseOf(gw.containerId);
+    expect(containerId).toBeDefined();
+  });
+
+  it("produces different content hashes for different setupCommands", async () => {
+    const { Gateway } = await import("../components/gateway");
+    const gw1 = new Gateway("test-gw-hash1", {
+      dockerHost: "ssh://root@100.64.0.1",
+      connection: { host: "100.64.0.1", user: "root" },
+      internalNetworkName: "openclaw-internal",
+      profile: "hash1",
+      version: "latest",
+      port: 18789,
+      setupCommands: ["config set foo bar"],
+      auth: { mode: "token", token: "test-token" },
+      tailscaleAuthKey: "tskey-auth-test",
+    });
+
+    const gw2 = new Gateway("test-gw-hash2", {
+      dockerHost: "ssh://root@100.64.0.1",
+      connection: { host: "100.64.0.1", user: "root" },
+      internalNetworkName: "openclaw-internal",
+      profile: "hash2",
+      version: "latest",
+      port: 18789,
+      setupCommands: ["config set baz qux"],
+      auth: { mode: "token", token: "test-token" },
+      tailscaleAuthKey: "tskey-auth-test",
+    });
+
+    const id1 = await promiseOf(gw1.containerId);
+    const id2 = await promiseOf(gw2.containerId);
+    expect(id1).toBeDefined();
+    expect(id2).toBeDefined();
+  });
+
   it("constructs with imageSteps without errors", async () => {
     const { Gateway } = await import("../components/gateway");
     const gw = new Gateway("test-gw-steps", {

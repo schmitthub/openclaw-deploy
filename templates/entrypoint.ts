@@ -41,6 +41,12 @@ ip route add default via "$ENVOY_IP" 2>/dev/null || \\
   ip route show default | grep -q "$ENVOY_IP" || \\
   { echo "ERROR: no default route via $ENVOY_IP — egress will be unreachable" >&2; exit 1; }
 
+# Verify iptables is available (requires CAP_NET_ADMIN).
+if ! iptables -L -n >/dev/null 2>&1; then
+  echo "ERROR: iptables not available — ensure container has CAP_NET_ADMIN" >&2
+  exit 1
+fi
+
 # Flush any existing rules (filter + nat tables).
 iptables -F OUTPUT 2>/dev/null || true
 iptables -F INPUT 2>/dev/null || true
@@ -154,10 +160,18 @@ tailscaled --tun=userspace-networking \\
   --socket=/var/run/tailscale/tailscaled.sock &
 
 # Wait for daemon to be ready (up to 30s)
+TS_DAEMON_READY=false
 for i in $(seq 1 30); do
-  tailscale --socket=/var/run/tailscale/tailscaled.sock status >/dev/null 2>&1 && break
+  if tailscale --socket=/var/run/tailscale/tailscaled.sock status >/dev/null 2>&1; then
+    TS_DAEMON_READY=true
+    break
+  fi
   sleep 1
 done
+if [ "$TS_DAEMON_READY" != "true" ]; then
+  echo "ERROR: tailscaled did not become ready in 30s — check container logs for tailscaled errors" >&2
+  exit 1
+fi
 
 # Authenticate if authkey provided and not already authenticated
 if [ -n "\${TAILSCALE_AUTHKEY:-}" ]; then
@@ -178,8 +192,8 @@ if command -v filebrowser >/dev/null 2>&1; then
 fi
 
 # Configure Tailscale Serve paths for web tools.
-tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /shell ${TTYD_PORT} || true
-tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /files ${FILEBROWSER_PORT} || true
+tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /shell ${TTYD_PORT} 2>&1 || echo "WARN: Failed to configure Tailscale Serve path /shell" >&2
+tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /files ${FILEBROWSER_PORT} 2>&1 || echo "WARN: Failed to configure Tailscale Serve path /files" >&2
 
 # Drop privileges and exec the CMD as the node user.
 exec gosu node "$@"

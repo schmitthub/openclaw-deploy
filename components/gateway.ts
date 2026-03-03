@@ -109,7 +109,7 @@ export class Gateway extends pulumi.ComponentResource {
       `${name}-build-image`,
       {
         connection: args.connection,
-        create: `docker build --platform linux/amd64 -t ${imageName} ${buildDir}`,
+        create: `docker build -t ${imageName} ${buildDir}`,
         delete: `docker rmi ${imageName} 2>/dev/null; true`,
       },
       {
@@ -158,7 +158,14 @@ export class Gateway extends pulumi.ComponentResource {
             pulumi.output(args.auth.token),
           ])
           .apply(([secretJson, token]) => {
-            const secrets = JSON.parse(secretJson) as Record<string, string>;
+            let secrets: Record<string, string>;
+            try {
+              secrets = JSON.parse(secretJson) as Record<string, string>;
+            } catch {
+              throw new Error(
+                `Invalid JSON in gatewaySecretEnv-${args.profile}: expected {"KEY":"value",...}`,
+              );
+            }
             // Include gateway token so setupCommands can reference $OPENCLAW_GATEWAY_TOKEN
             secrets["OPENCLAW_GATEWAY_TOKEN"] = token;
             const entries = Object.entries(secrets);
@@ -241,9 +248,15 @@ export class Gateway extends pulumi.ComponentResource {
     // Merge secret env vars into the container's envs.
     // secretEnv is a Pulumi secret, so we resolve both base envs and parsed
     // secrets into a single Output<string[]> for the container's envs field.
-    const secretEnvParsed = pulumi
-      .output(args.secretEnv ?? "{}")
-      .apply((s) => JSON.parse(s) as Record<string, string>);
+    const secretEnvParsed = pulumi.output(args.secretEnv ?? "{}").apply((s) => {
+      try {
+        return JSON.parse(s) as Record<string, string>;
+      } catch {
+        throw new Error(
+          `Invalid JSON in gatewaySecretEnv-${args.profile}: expected {"KEY":"value",...}`,
+        );
+      }
+    });
 
     // Filter out reserved env vars that are managed by this component.
     // Docker uses the last value for duplicate keys, so user-provided
@@ -255,6 +268,24 @@ export class Gateway extends pulumi.ComponentResource {
       "OPENCLAW_TCP_MAPPINGS",
       "OPENCLAW_UDP_MAPPINGS",
     ]);
+
+    // Warn at plan time if secretEnv contains reserved keys that will be silently filtered.
+    pulumi.output(args.secretEnv ?? "{}").apply((s) => {
+      try {
+        const parsed = JSON.parse(s) as Record<string, string>;
+        const conflicts = Object.keys(parsed).filter((k) =>
+          RESERVED_ENV_KEYS.has(k),
+        );
+        if (conflicts.length > 0) {
+          pulumi.log.warn(
+            `gatewaySecretEnv-${args.profile} contains reserved key(s) that will be ignored: ${conflicts.join(", ")}`,
+            this,
+          );
+        }
+      } catch {
+        // JSON parse error is handled by secretEnvParsed above
+      }
+    });
 
     const computedEnvs = pulumi
       .all([pulumi.all(envs), secretEnvParsed])
@@ -328,7 +359,8 @@ export class Gateway extends pulumi.ComponentResource {
         connection: args.connection,
         create: [
           // Wait for Tailscale to authenticate inside the container (up to 120s)
-          `for i in $(seq 1 60); do docker exec ${containerName} tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break; sleep 2; done`,
+          `TS_READY=false; for i in $(seq 1 60); do docker exec ${containerName} tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && TS_READY=true && break; sleep 2; done`,
+          `if [ "$TS_READY" != "true" ]; then echo "ERROR: Tailscale did not reach Running state in 120s" >&2; exit 1; fi`,
           // Extract DNSName via jq (installed on host by bootstrap)
           `docker exec ${containerName} tailscale --socket=/var/run/tailscale/tailscaled.sock status --json | jq -r '.Self.DNSName' | sed 's/\\.$//'`,
         ].join(" && "),

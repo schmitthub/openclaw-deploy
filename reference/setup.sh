@@ -124,6 +124,9 @@ docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
 
 echo ""
 echo "==> Setting Discord config"
+if [[ -z "${DISCORD_BOT_TOKEN:-}" ]] || [[ -z "${DISCORD_USER_ID:-}" ]] || [[ -z "${DISCORD_SERVER_ID:-}" ]]; then
+  echo "WARN: Skipping Discord config — DISCORD_BOT_TOKEN, DISCORD_USER_ID, or DISCORD_SERVER_ID not set" >&2
+else
 docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
   config set channels.discord.token '{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}'
 docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
@@ -134,7 +137,7 @@ docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
   config set channels.discord.groupPolicy allowlist
 docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
   config set channels.discord.guilds "{\"$DISCORD_SERVER_ID\": {\"users\": [\"$DISCORD_USER_ID\"], \"requireMention\": false}}"
-
+fi
 
 echo ""
 echo "==> Starting Stack"

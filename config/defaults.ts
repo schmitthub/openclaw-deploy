@@ -30,7 +30,6 @@ export const DOCKER_BASE_IMAGE = "node:22-bookworm";
 // Web tools (always installed and started)
 export const TTYD_PORT = 7681;
 export const FILEBROWSER_PORT = 8080;
-export const CONTROL_UI_BASE_PATH = "/openclaw";
 
 // Core apt packages (always installed)
 export const CORE_APT_PACKAGES = [

@@ -420,6 +420,12 @@ export function renderEnvoyConfig(
         });
         break;
       }
+
+      default:
+        warnings.push(
+          `Unknown protocol "${(rule as EgressRule).proto}" for destination "${rule.dst}" — skipped`,
+        );
+        break;
     }
   }
 

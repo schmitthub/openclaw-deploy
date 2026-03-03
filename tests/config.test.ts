@@ -59,6 +59,11 @@ describe("domain registry", () => {
     }
   });
 
+  it("includes Let's Encrypt ACME domain for Tailscale Serve TLS certs", () => {
+    const dsts = TAILSCALE_TLS_DOMAINS.map((r) => r.dst);
+    expect(dsts).toContain("*.api.letsencrypt.org");
+  });
+
   it("includes all 12 DERP relay UDP domains on port 3478", () => {
     for (let i = 1; i <= 12; i++) {
       const rule = TAILSCALE_UDP_DOMAINS.find(
