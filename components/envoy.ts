@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as pulumi from "@pulumi/pulumi";
 import * as docker from "@pulumi/docker";
 import * as command from "@pulumi/command";
@@ -52,6 +53,8 @@ export class EnvoyEgress extends pulumi.ComponentResource {
   public readonly udpPortMappings: UdpPortMapping[];
   /** Warnings from egress policy rendering (e.g. unsupported rule types) */
   public readonly warnings: string[];
+  /** SHA256 hash (12 chars) of rendered envoy.yaml — triggers container replacement on config change */
+  public readonly configHash: string;
 
   constructor(
     name: string,
@@ -66,6 +69,11 @@ export class EnvoyEgress extends pulumi.ComponentResource {
     this.tcpPortMappings = envoyConfig.tcpPortMappings;
     this.udpPortMappings = envoyConfig.udpPortMappings;
     this.warnings = envoyConfig.warnings;
+    this.configHash = crypto
+      .createHash("sha256")
+      .update(envoyConfig.yaml)
+      .digest("hex")
+      .slice(0, 12);
 
     // Docker provider connected to the remote host
     const dockerProvider = new docker.Provider(
@@ -191,6 +199,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
             name: egressNetwork.name,
           },
         ],
+        labels: [{ label: "openclaw.config-hash", value: this.configHash }],
         volumes: [
           {
             hostPath: configPath,
@@ -226,6 +235,19 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       },
     );
 
+    // Step 6: Wait for Envoy to pass Docker healthcheck before gateways start.
+    // Gateway containers depend on EnvoyEgress (parent component), so Pulumi
+    // won't create them until all child resources — including this command — complete.
+    new command.remote.Command(
+      `${name}-healthy`,
+      {
+        connection: args.connection,
+        create: pulumi.interpolate`for i in $(seq 1 30); do if [ "$(docker inspect --format='{{.State.Health.Status}}' envoy 2>/dev/null)" = "healthy" ]; then exit 0; fi; sleep 2; done; echo "ERROR: Envoy did not become healthy within 60s" >&2; exit 1`,
+        triggers: [envoyContainer.id],
+      },
+      { parent: this, dependsOn: [envoyContainer] },
+    );
+
     // Outputs
     this.envoyIP = pulumi.output(ENVOY_STATIC_IP);
     this.internalNetworkId = internalNetwork.id;
@@ -243,6 +265,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       egressNetworkName: this.egressNetworkName,
       containerId: this.containerId,
       caCertPath: this.caCertPath,
+      configHash: this.configHash,
       inspectedDomains: this.inspectedDomains,
       tcpPortMappings: this.tcpPortMappings,
       udpPortMappings: this.udpPortMappings,
