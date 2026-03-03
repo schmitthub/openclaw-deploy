@@ -541,6 +541,25 @@ describe("EnvoyEgress component", () => {
     const caCertPath = await promiseOf(envoy.caCertPath);
     expect(caCertPath).toBe(ENVOY_CA_CERT_PATH);
   });
+
+  it("produces different config hashes for different egress policies", async () => {
+    const { EnvoyEgress } = await import("../components/envoy");
+    const envoy1 = new EnvoyEgress("test-envoy-hash1", {
+      dockerHost: "ssh://root@100.64.0.1",
+      connection: { host: "100.64.0.1", user: "root" },
+      egressPolicy: [],
+    });
+    const envoy2 = new EnvoyEgress("test-envoy-hash2", {
+      dockerHost: "ssh://root@100.64.0.1",
+      connection: { host: "100.64.0.1", user: "root" },
+      egressPolicy: [
+        { dst: "extra.example.com", proto: "tls", action: "allow" },
+      ],
+    });
+    expect(envoy1.configHash).toBeDefined();
+    expect(envoy2.configHash).toBeDefined();
+    expect(envoy1.configHash).not.toBe(envoy2.configHash);
+  });
 });
 
 describe("Gateway component", () => {
