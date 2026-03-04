@@ -156,15 +156,22 @@ export class Gateway extends pulumi.ComponentResource {
     const containerName = `openclaw-gateway-${args.profile}`;
 
     // Init container runs user setupCommands only (prefixed with `openclaw `)
-    const setupCmds = (args.setupCommands ?? []).map(
-      (cmd) => `openclaw ${cmd}`,
-    );
+    const setupCmds = (args.setupCommands ?? [])
+      .filter((cmd) => {
+        if (!cmd.trim()) {
+          pulumi.log.warn(
+            `Skipping empty setupCommand for gateway ${args.profile}`,
+            this,
+          );
+          return false;
+        }
+        return true;
+      })
+      .map((cmd) => `openclaw ${cmd}`);
 
-    // Base64-encode the init script to avoid nested shell quoting issues.
-    // The script runs inside the container where env vars ($SECRET_ENV_VARS)
-    // are available from the --env-file.
+    // Joined script used for content hashing on the container label (openclaw.init-hash).
+    // When any setup command changes, the hash changes, forcing container replacement.
     const initScript = setupCmds.join("\n");
-    const encodedInitScript = Buffer.from(initScript).toString("base64");
 
     // Step 4a: Write secret env file to host (separate command so secrets
     // don't appear in the init container command string on error).
@@ -209,36 +216,44 @@ export class Gateway extends pulumi.ComponentResource {
       },
     );
 
-    // Step 4b: Run init container with base64-decoded script piped to sh.
-    // The --env-file provides secret env vars; the command string has no secrets.
-    const writeConfig = new command.remote.Command(
-      `${name}-write-config`,
-      {
-        connection: args.connection,
-        create: [
-          // Skip init if gateway is already configured (token exists in config file on host).
-          // Requires jq on the host (installed by HostBootstrap).
-          `if jq -e '.gateway.auth.token // empty' ${dataDir}/config/openclaw.json >/dev/null 2>&1;`,
-          `then echo "Gateway already configured (token found), skipping init."; echo "To force re-init: rm ${dataDir}/config/openclaw.json on the host"; exit 0; fi`,
-          `&& echo '${encodedInitScript}' | base64 -d > ${dataDir}/.init.sh`,
-          `&&`,
-          `docker run --rm --network none --user node`,
-          `--entrypoint /bin/sh`,
-          `--env-file ${envFile}`,
-          `-v openclaw-home-${args.profile}:/home/node`,
-          `-v ${dataDir}/config:${DEFAULT_OPENCLAW_CONFIG_DIR}`,
-          `-v ${dataDir}/workspace:${DEFAULT_OPENCLAW_WORKSPACE_DIR}`,
-          `-v ${dataDir}/.init.sh:/tmp/init.sh:ro`,
-          `${imageName} /tmp/init.sh`,
-          `&& rm -f ${dataDir}/.init.sh`,
-        ].join(" "),
-        delete: `rm -f ${dataDir}/.init.sh`,
-      },
-      {
-        parent: this,
-        dependsOn: [writeSecretEnv],
-      },
-    );
+    // Step 4b: Run each setup command as an individual Pulumi resource.
+    // Pulumi tracks each command independently — re-runs when any input
+    // changes (command content, connection, image name, etc.).
+    const setupResources: command.remote.Command[] = [];
+
+    for (let i = 0; i < setupCmds.length; i++) {
+      const cmd = setupCmds[i];
+      const words = cmd.replace(/^openclaw\s+/, "").split(/\s+/);
+      const slug = words.slice(0, 2).join("-");
+      const encoded = Buffer.from(cmd).toString("base64");
+
+      const setupResource = new command.remote.Command(
+        `${name}-setup-${i}-${slug}`,
+        {
+          connection: args.connection,
+          create: [
+            `docker run --rm --network none --user node`,
+            `--entrypoint /bin/sh`,
+            `--env-file ${envFile}`,
+            `-v openclaw-home-${args.profile}:/home/node`,
+            `-v ${dataDir}/config:${DEFAULT_OPENCLAW_CONFIG_DIR}`,
+            `-v ${dataDir}/workspace:${DEFAULT_OPENCLAW_WORKSPACE_DIR}`,
+            `${imageName} -c "set -e; echo '${encoded}' | base64 -d | sh -e"`,
+          ].join(" "),
+        },
+        {
+          parent: this,
+          dependsOn: [i === 0 ? writeSecretEnv : setupResources[i - 1]],
+          additionalSecretOutputs: ["stdout", "stderr"],
+        },
+      );
+      setupResources.push(setupResource);
+    }
+
+    const lastSetupDep =
+      setupResources.length > 0
+        ? setupResources[setupResources.length - 1]
+        : writeSecretEnv;
 
     // Step 5: Create the gateway container
 
@@ -301,19 +316,21 @@ export class Gateway extends pulumi.ComponentResource {
 
     // Warn at plan time if secretEnv contains reserved keys that will be silently filtered.
     pulumi.output(args.secretEnv ?? "{}").apply((s) => {
+      let parsed: Record<string, string>;
       try {
-        const parsed = JSON.parse(s) as Record<string, string>;
-        const conflicts = Object.keys(parsed).filter((k) =>
-          RESERVED_ENV_KEYS.has(k),
-        );
-        if (conflicts.length > 0) {
-          pulumi.log.warn(
-            `gatewaySecretEnv-${args.profile} contains reserved key(s) that will be ignored: ${conflicts.join(", ")}`,
-            this,
-          );
-        }
+        parsed = JSON.parse(s) as Record<string, string>;
       } catch {
         // JSON parse error is handled by secretEnvParsed above
+        return;
+      }
+      const conflicts = Object.keys(parsed).filter((k) =>
+        RESERVED_ENV_KEYS.has(k),
+      );
+      if (conflicts.length > 0) {
+        pulumi.log.warn(
+          `gatewaySecretEnv-${args.profile} contains reserved key(s) that will be ignored: ${conflicts.join(", ")}`,
+          this,
+        );
       }
     });
 
@@ -404,7 +421,7 @@ export class Gateway extends pulumi.ComponentResource {
       {
         parent: this,
         provider: dockerProvider,
-        dependsOn: [writeConfig],
+        dependsOn: [lastSetupDep],
         additionalSecretOutputs: ["envs"],
       },
     );
