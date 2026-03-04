@@ -132,6 +132,55 @@ describe("renderEnvoyConfig", () => {
     });
   });
 
+  describe("TCP keepalive and idle timeout", () => {
+    it("has idle_timeout: 0s on the passthrough tcp_proxy filter", () => {
+      const { yaml } = renderEnvoyConfig();
+      // Extract the passthrough filter chain section
+      const allowedSection =
+        yaml
+          .split("stat_prefix: egress_tls_allowed")[1]
+          ?.split("stat_prefix:")[0] ?? "";
+      expect(allowedSection).toContain("idle_timeout: 0s");
+    });
+
+    it("has idle_timeout: 0s on the deny tcp_proxy filter", () => {
+      const { yaml } = renderEnvoyConfig();
+      const deniedSection =
+        yaml.split("stat_prefix: egress_denied")[1]?.split("\n\n")[0] ?? "";
+      expect(deniedSection).toContain("idle_timeout: 0s");
+    });
+
+    it("has idle_timeout: 0s on dedicated TCP listener tcp_proxy filters", () => {
+      const userRules: EgressRule[] = [
+        { dst: "github.com", proto: "ssh", port: 22, action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(userRules);
+      // Find the TCP listener section and verify idle_timeout is on its tcp_proxy
+      const listenerStart = yaml.indexOf("# SSH egress: github.com:22");
+      expect(listenerStart).toBeGreaterThan(-1);
+      const listenerSection = yaml.substring(
+        listenerStart,
+        listenerStart + 500,
+      );
+      expect(listenerSection).toContain("idle_timeout: 0s");
+    });
+
+    it("has tcp_keepalive on dynamic_forward_proxy_cluster", () => {
+      const { yaml } = renderEnvoyConfig();
+      expect(yaml).toContain("upstream_connection_options:");
+      expect(yaml).toContain("tcp_keepalive:");
+      expect(yaml).toContain("keepalive_time: 60");
+      expect(yaml).toContain("keepalive_interval: 10");
+      expect(yaml).toContain("keepalive_probes: 3");
+    });
+
+    it("tcp_keepalive is on the dynamic_forward_proxy_cluster, not deny_cluster", () => {
+      const { yaml } = renderEnvoyConfig();
+      const denySection = yaml.split("name: deny_cluster")[1] ?? "";
+      expect(denySection).not.toContain("tcp_keepalive");
+    });
+  });
+
   describe("clusters", () => {
     it("has dynamic_forward_proxy_cluster with CLUSTER_PROVIDED", () => {
       const { yaml } = renderEnvoyConfig();

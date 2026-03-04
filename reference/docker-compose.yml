@@ -32,6 +32,10 @@ services:
     image: openclaw-gateway:local
     cap_add:
       - NET_ADMIN
+    sysctls:
+      - net.ipv4.tcp_keepalive_time=60
+      - net.ipv4.tcp_keepalive_intvl=10
+      - net.ipv4.tcp_keepalive_probes=3
     environment:
       HOME: /home/node
       TERM: xterm-256color

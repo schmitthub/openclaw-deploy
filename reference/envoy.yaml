@@ -89,6 +89,7 @@ static_resources:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
                 stat_prefix: egress_tls_allowed
                 cluster: dynamic_forward_proxy_cluster
+                idle_timeout: 0s
         # Default deny: non-whitelisted SNI or non-TLS traffic.
         # Connection is immediately reset (deny_cluster has no endpoints).
         - filters:
@@ -97,6 +98,7 @@ static_resources:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
                 stat_prefix: egress_denied
                 cluster: deny_cluster
+                idle_timeout: 0s
 
     # DNS: forward resolver for containers on the internal network.
     # Docker's embedded DNS cannot forward external queries from internal-only
@@ -378,6 +380,11 @@ static_resources:
           dns_cache_config:
             name: dynamic_forward_proxy_cache
             dns_lookup_family: V4_PREFERRED
+      upstream_connection_options:
+        tcp_keepalive:
+          keepalive_time: 60
+          keepalive_interval: 10
+          keepalive_probes: 3
 
     - name: udp_udp_derp1_tailscale_com_3478
       type: STRICT_DNS
