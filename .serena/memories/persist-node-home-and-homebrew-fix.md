@@ -7,14 +7,14 @@ Persist `/home/node` and `/home/linuxbrew/.linuxbrew` across container recreatio
 `fix/openclaw-doctor`
 
 ## Current Status
-All code changes complete. 260/260 tests pass. Hetzner UAT deployed (28 resources, IP 46.224.86.79). Several runtime issues discovered and fixed during UAT. **Current blocker: user reports they cannot edit settings in the Control UI — needs investigation.**
+All code changes complete. 260/260 tests pass. Hetzner UAT deployed (28 resources). Several runtime issues discovered and fixed during UAT. **Current blocker: user reports they cannot edit settings in the Control UI — needs investigation.**
 
 ## Hetzner UAT Stack Info
 - Stack: `hetzner-uat`
-- Server IP: `46.224.86.79`
-- Tailscale hostname: `f7fed8b6ee85.taildc11cf.ts.net`
+- Server IP: `<UAT_SERVER_IP>`
+- Tailscale hostname: `<UAT_TAILSCALE_HOSTNAME>`
 - Token was regenerated (lowercase-only change) — config file has OLD token, env var has NEW token. **Old token is the one that works** because init container didn't re-run.
-- Gateway services: `pulumi stack output gatewayServices -s hetzner-uat --show-secrets`
+- Gateway services: `pulumi stack output gatewayServices -s <UAT_STACK_NAME> --show-secrets`
 
 ## Key Discoveries & Lessons Learned
 

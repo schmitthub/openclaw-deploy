@@ -11,13 +11,13 @@
 
 ## Hetzner UAT Stack Info
 - Stack: `hetzner-uat`
-- Server IP: `46.224.86.79`
-- Tailscale hostname: `18980d6e7b76.taildc11cf.ts.net`
+- Server IP: `<UAT_SERVER_IP>`
+- Tailscale hostname: `<UAT_TAILSCALE_HOSTNAME>`
 - 28 resources deployed, all 260 tests pass
 - Token: set via `pulumi config set --secret gatewayToken-uat` (matches openclaw.json)
 
 ## Local Reference Stack
-- Tailscale hostname: `051a5204cead.taildc11cf.ts.net`
+- Tailscale hostname: `<LOCAL_TAILSCALE_HOSTNAME>`
 
 ## What Was Done
 

@@ -32,7 +32,7 @@ RUN npm install -g pnpm && \
 
 # Install Homebrew (Linuxbrew) via dedicated linuxbrew user at default prefix.
 # Custom prefixes lose bottle (binary) support — everything builds from source.
-# The /home/linuxbrew directory is bind-mounted for persistence across container recreations.
+# The /home/linuxbrew directory is mounted as a named volume for persistence across container recreations.
 # The node user is added to the linuxbrew group for write access (brew install at runtime).
 ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew
 ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
