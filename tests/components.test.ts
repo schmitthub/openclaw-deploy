@@ -752,8 +752,8 @@ describe("Gateway component", () => {
       auth: { mode: "token", token: "test-token" },
       tailscaleAuthKey: "tskey-auth-test",
       imageSteps: [
-        { user: "root", run: "apt-get install -y ffmpeg" },
-        { user: "node", run: "npm install -g some-tool" },
+        { run: "apt-get install -y ffmpeg" },
+        { run: "apt-get install -y some-lib" },
       ],
     });
 

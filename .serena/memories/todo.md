@@ -8,4 +8,4 @@ This document covers open features and bugs that I want to address in the future
 - [ ] SSH hardening: Short-lived SSH certificates, Pulumi ESC key management, rotate keys.
 - [ ] Per-gateway Tailscale authkeys: tailscaleAuthKey-<profile> pattern (like gatewayToken-<profile>) for one-time keys with multi-gateway.
 - [ ] Looks like we aren't dynamically adding custom binary installs to the dockerfile for per-deployment skill dependencies
-- [ ] Looks like we aren't dynamically running openclaw setup commands for per-deployment customizations
+- [ ] **Per-command init tracking**: Replace all-or-nothing init container with one `command.remote.Command` per setupCommand, named by content hash. Pulumi tracks each independently — only new/changed commands run. Use `retainOnDelete: true` so removing a command doesn't undo it. Each command runs as an ephemeral `docker run --rm --network none --user node` container with the same bind mounts (config, workspace, home volumes) — pre-configures the gateway's files before the gateway container starts. No `docker exec` (gateway container runs as `node`, no root shell access).

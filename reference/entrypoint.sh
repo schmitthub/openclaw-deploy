@@ -32,6 +32,12 @@ INTERNAL_SUBNET="${ENVOY_IP%.*}.0/24"
 # then rewrites the destination to Envoy's egress listener.
 ip route add default via "$ENVOY_IP" 2>/dev/null ||   ip route show default | grep -q "$ENVOY_IP" ||   { echo "ERROR: no default route via $ENVOY_IP — egress will be unreachable" >&2; exit 1; }
 
+# Verify iptables is available (requires CAP_NET_ADMIN).
+if ! iptables -L -n >/dev/null 2>&1; then
+  echo "ERROR: iptables not available — ensure container has CAP_NET_ADMIN" >&2
+  exit 1
+fi
+
 # Flush any existing rules (filter + nat tables).
 iptables -F OUTPUT 2>/dev/null || true
 iptables -F INPUT 2>/dev/null || true
@@ -144,16 +150,22 @@ if [ -d "/var/lib/tailscale" ]; then
     --state=/var/lib/tailscale/tailscaled.state \
     --socket=/var/run/tailscale/tailscaled.sock &
 
-  # Wait for daemon to be ready (up to 30s)
+  # Wait for daemon socket to appear (up to 30s).
+  # Note: tailscale status returns non-zero in NeedsLogin state (before auth),
+  # so we check for the socket file instead.
   for i in $(seq 1 30); do
-    tailscale --socket=/var/run/tailscale/tailscaled.sock status >/dev/null 2>&1 && break
+    [ -S /var/run/tailscale/tailscaled.sock ] && break
     sleep 1
   done
+  if [ ! -S /var/run/tailscale/tailscaled.sock ]; then
+    echo "ERROR: tailscaled socket did not appear in 30s" >&2
+    exit 1
+  fi
 
   # Authenticate if authkey provided and not already authenticated
   if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
     if ! tailscale --socket=/var/run/tailscale/tailscaled.sock status 2>&1 | grep -q "^100\."; then
-      tailscale --socket=/var/run/tailscale/tailscaled.sock up --authkey="$TAILSCALE_AUTHKEY" --ssh
+      tailscale --socket=/var/run/tailscale/tailscaled.sock up --authkey="$TAILSCALE_AUTHKEY" --reset
     fi
   fi
 
@@ -163,7 +175,7 @@ fi
 
 # Start web tools on loopback (accessible only via Tailscale Serve).
 if command -v ttyd >/dev/null 2>&1; then
-  gosu node ttyd --port 7681 --interface lo --writable bash &
+  ttyd --port 7681 --interface lo --writable bash &
 fi
 if command -v filebrowser >/dev/null 2>&1; then
   gosu node filebrowser --address 127.0.0.1 --port 8080 --noauth --root /home/node --baseurl /files &
@@ -171,8 +183,21 @@ fi
 
 # Configure Tailscale Serve paths for web tools.
 if [ -d "/var/lib/tailscale" ]; then
-  tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /shell 7681 || true
-  tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /files 8080 || true
+  tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /shell 7681 2>&1 || echo "WARN: Failed to configure Tailscale Serve path /shell" >&2
+  tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /files 8080 2>&1 || echo "WARN: Failed to configure Tailscale Serve path /files" >&2
+fi
+
+# Tighten config dir permissions (bind mounts inherit host perms, this fixes both sides).
+chown node:node /home/node/.openclaw 2>/dev/null || true
+chmod 700 /home/node/.openclaw 2>/dev/null || true
+
+# Fix git safe.directory for linuxbrew repo (volume UID mismatch).
+# Homebrew repos are owned by the linuxbrew user but node runs brew.
+# Git refuses to operate on repos owned by a different user without this exception.
+if command -v git >/dev/null 2>&1; then
+  gosu node git config --global --get-all safe.directory 2>/dev/null \
+    | grep -qF "/home/linuxbrew/.linuxbrew/Homebrew" \
+    || gosu node git config --global --add safe.directory /home/linuxbrew/.linuxbrew/Homebrew
 fi
 
 # Drop privileges and exec the CMD as the node user.

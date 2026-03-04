@@ -159,24 +159,22 @@ tailscaled --tun=userspace-networking \\
   --state=/var/lib/tailscale/tailscaled.state \\
   --socket=/var/run/tailscale/tailscaled.sock &
 
-# Wait for daemon to be ready (up to 30s)
-TS_DAEMON_READY=false
+# Wait for daemon socket to appear (up to 30s).
+# Note: tailscale status returns non-zero in NeedsLogin state (before auth),
+# so we check for the socket file instead.
 for i in $(seq 1 30); do
-  if tailscale --socket=/var/run/tailscale/tailscaled.sock status >/dev/null 2>&1; then
-    TS_DAEMON_READY=true
-    break
-  fi
+  [ -S /var/run/tailscale/tailscaled.sock ] && break
   sleep 1
 done
-if [ "$TS_DAEMON_READY" != "true" ]; then
-  echo "ERROR: tailscaled did not become ready in 30s — check container logs for tailscaled errors" >&2
+if [ ! -S /var/run/tailscale/tailscaled.sock ]; then
+  echo "ERROR: tailscaled socket did not appear in 30s" >&2
   exit 1
 fi
 
 # Authenticate if authkey provided and not already authenticated
 if [ -n "\${TAILSCALE_AUTHKEY:-}" ]; then
   if ! tailscale --socket=/var/run/tailscale/tailscaled.sock status 2>&1 | grep -q "^100\\."; then
-    tailscale --socket=/var/run/tailscale/tailscaled.sock up --authkey="$TAILSCALE_AUTHKEY" --ssh
+    tailscale --socket=/var/run/tailscale/tailscaled.sock up --authkey="$TAILSCALE_AUTHKEY" --reset
   fi
 fi
 
@@ -185,7 +183,7 @@ tailscale --socket=/var/run/tailscale/tailscaled.sock set --ssh --operator=node
 
 # Start web tools on loopback (accessible only via Tailscale Serve).
 if command -v ttyd >/dev/null 2>&1; then
-  gosu node ttyd --port ${TTYD_PORT} --interface lo --writable bash &
+  ttyd --port ${TTYD_PORT} --interface lo --writable bash &
 fi
 if command -v filebrowser >/dev/null 2>&1; then
   gosu node filebrowser --address 127.0.0.1 --port ${FILEBROWSER_PORT} --noauth --root /home/node --baseurl /files &
@@ -194,6 +192,19 @@ fi
 # Configure Tailscale Serve paths for web tools.
 tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /shell ${TTYD_PORT} 2>&1 || echo "WARN: Failed to configure Tailscale Serve path /shell" >&2
 tailscale --socket=/var/run/tailscale/tailscaled.sock serve --bg --set-path /files ${FILEBROWSER_PORT} 2>&1 || echo "WARN: Failed to configure Tailscale Serve path /files" >&2
+
+# Tighten config dir permissions (bind mounts inherit host perms, this fixes both sides).
+chown node:node /home/node/.openclaw 2>/dev/null || true
+chmod 700 /home/node/.openclaw 2>/dev/null || true
+
+# Fix git safe.directory for linuxbrew repo (volume UID mismatch).
+# Homebrew repos are owned by the linuxbrew user but node runs brew.
+# Git refuses to operate on repos owned by a different user without this exception.
+if command -v git >/dev/null 2>&1; then
+  gosu node git config --global --get-all safe.directory 2>/dev/null \\
+    | grep -qF "/home/linuxbrew/.linuxbrew/Homebrew" \\
+    || gosu node git config --global --add safe.directory /home/linuxbrew/.linuxbrew/Homebrew
+fi
 
 # Drop privileges and exec the CMD as the node user.
 exec gosu node "$@"

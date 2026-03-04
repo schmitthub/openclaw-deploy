@@ -26,6 +26,7 @@ export const DEFAULT_GATEWAY_PORT = 18789;
 export const DEFAULT_OPENCLAW_CONFIG_DIR = "/home/node/.openclaw";
 export const DEFAULT_OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
 export const DOCKER_BASE_IMAGE = "node:22-bookworm";
+export const NODE_COMPILE_CACHE_DIR = "/home/node/.node-compile-cache";
 
 // Web tools (always installed and started)
 export const TTYD_PORT = 7681;
@@ -37,6 +38,9 @@ export const CORE_APT_PACKAGES = [
   "iproute2",
   "gosu",
   "libsecret-tools",
+  "build-essential", // Homebrew requirement (compiling from source when bottles unavailable)
+  "ripgrep",
+  "jq",
 ];
 
 // Tailscale Funnel allowed ports

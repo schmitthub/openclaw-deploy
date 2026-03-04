@@ -36,6 +36,9 @@ static_resources:
               - "*.githubusercontent.com"
               - "ghcr.io"
               - "formulae.brew.sh"
+              - "proxy.golang.org"
+              - "sum.golang.org"
+              - "storage.googleapis.com"
               - "tailscale.com"
               - "login.tailscale.com"
               - "controlplane.tailscale.com"
@@ -56,6 +59,23 @@ static_resources:
               - "derp10.tailscale.com"
               - "derp11.tailscale.com"
               - "derp12.tailscale.com"
+              - "derp13.tailscale.com"
+              - "derp14.tailscale.com"
+              - "derp15.tailscale.com"
+              - "derp16.tailscale.com"
+              - "derp17.tailscale.com"
+              - "derp18.tailscale.com"
+              - "derp19.tailscale.com"
+              - "derp20.tailscale.com"
+              - "derp21.tailscale.com"
+              - "derp22.tailscale.com"
+              - "derp23.tailscale.com"
+              - "derp24.tailscale.com"
+              - "derp25.tailscale.com"
+              - "derp26.tailscale.com"
+              - "derp27.tailscale.com"
+              - "derp28.tailscale.com"
+
           filters:
             - name: envoy.filters.network.sni_dynamic_forward_proxy
               typed_config:

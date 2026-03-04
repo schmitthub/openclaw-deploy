@@ -24,15 +24,15 @@ config:
           onboard --non-interactive --tailscale serve --accept-risk
           --mode local --gateway-bind loopback
           --gateway-token "$OPENCLAW_GATEWAY_TOKEN"
-          --no-install-daemon
+          --no-install-daemon --node-manager pnpm
           --auth-choice token --token-provider anthropic --token "$ANTHROPIC_API_KEY"
           # OpenRouter: --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY"
           # OpenAI:     --auth-choice openai-api-key --openai-api-key "$OPENAI_API_KEY"
           --skip-channels --skip-skills --skip-daemon --skip-health
         - config set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback true
-        - config set gateway.auth.mode trusted-proxy
-        - config set gateway.trustedProxies '["127.0.0.1"]'
-        - config set gateway.auth.trustedProxy.userHeader tailscale-user-login
+        - config set gateway.auth.allowTailscale false
+        - config set gateway.controlUi.dangerouslyDisableDeviceAuth true
+        - config set gateway.trustedProxies '["127.0.0.1/8"]'
         - config set gateway.controlUi.basePath /openclaw
   openclaw-deploy:gatewaySecretEnv-dev:
     secure: <encrypted>  # JSON: {"ANTHROPIC_API_KEY":"sk-ant-..."}
