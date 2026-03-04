@@ -377,6 +377,11 @@ export class Gateway extends pulumi.ComponentResource {
         restart: "unless-stopped",
         init: true,
         capabilities: { adds: ["NET_ADMIN"] },
+        sysctls: {
+          "net.ipv4.tcp_keepalive_time": "60",
+          "net.ipv4.tcp_keepalive_intvl": "10",
+          "net.ipv4.tcp_keepalive_probes": "3",
+        },
         dns: [ENVOY_STATIC_IP],
         envs: computedEnvs,
         command: containerCommand,

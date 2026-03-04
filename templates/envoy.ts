@@ -159,7 +159,8 @@ function renderTcpListener(mapping: TcpPortMapping): string {
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
           stat_prefix: ${safeName}
-          cluster: ${clusterName}`;
+          cluster: ${clusterName}
+          idle_timeout: 0s`;
 }
 
 /** Render a STRICT_DNS or STATIC cluster for a single SSH/TCP egress rule. */
@@ -484,6 +485,7 @@ ${domainLines}
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
           stat_prefix: egress_tls_allowed
           cluster: dynamic_forward_proxy_cluster
+          idle_timeout: 0s
     # Default deny: non-whitelisted SNI or non-TLS traffic.
     # Connection is immediately reset (deny_cluster has no endpoints).
     - filters:
@@ -492,6 +494,7 @@ ${domainLines}
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
           stat_prefix: egress_denied
           cluster: deny_cluster
+          idle_timeout: 0s
 
   # DNS: forward resolver for containers on the internal network.
   # Docker's embedded DNS cannot forward external queries from internal-only
@@ -535,6 +538,11 @@ ${udpListenerSection}
         dns_cache_config:
           name: dynamic_forward_proxy_cache
           dns_lookup_family: V4_PREFERRED
+    upstream_connection_options:
+      tcp_keepalive:
+        keepalive_time: 60
+        keepalive_interval: 10
+        keepalive_probes: 3
 ${mitmClusterSection}
 ${tcpClusterSection}
 ${udpClusterSection}
