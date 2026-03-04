@@ -15,12 +15,22 @@ Results here inform the `setupCommands` and `configSet` values used in Pulumi st
 
 ## Files
 
-| File                 | Description                                                                              |
-| -------------------- | ---------------------------------------------------------------------------------------- |
-| `docker-compose.yml` | Two-service stack: `openclaw-gateway` (server) + `openclaw-cli` (ephemeral CLI runner)   |
-| `setup.sh`           | Adapted setup script — builds data dirs, fixes permissions, runs onboard, starts gateway |
-| `.gitignore`         | Excludes `data/` (config + workspace volumes) and `.env`                                 |
-| `data/`              | Created at runtime — bind-mounted as config and workspace volumes (gitignored)           |
+| File                 | Description                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| `docker-compose.yml` | Two-service stack: `openclaw-gateway` (server) + `openclaw-cli` (ephemeral CLI runner) |
+| `setup.sh`           | Runtime configuration only — onboard commands, config set, starts gateway              |
+| `.gitignore`         | Excludes `data/` (config + workspace volumes) and `.env`                               |
+| `data/`              | Created at runtime — bind-mounted as config and workspace volumes (gitignored)         |
+
+## Separation of Concerns
+
+| Layer           | Responsibility                                                                 |
+| --------------- | ------------------------------------------------------------------------------ |
+| `Dockerfile`    | Package installs, binary setup, env vars, filesystem permissions, dir creation |
+| `entrypoint.sh` | iptables/networking, Tailscale daemon, privilege drop (`gosu node`)            |
+| `setup.sh`      | Runtime app config only — `openclaw config set`, `openclaw onboard`, stack up  |
+
+Do NOT put filesystem permissions or binary installs in `setup.sh`. Do NOT put app-level config in the Dockerfile or entrypoint.
 
 ## Prerequisites
 

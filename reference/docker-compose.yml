@@ -43,7 +43,7 @@ services:
       DISCORD_SERVER_ID: ${DISCORD_SERVER_ID:-}
       TAILSCALE_AUTHKEY: ${TAILSCALE_DEVICE_KEY:-}
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
-      OPENCLAW_UDP_MAPPINGS: "derp1.tailscale.com|3478|10100;derp2.tailscale.com|3478|10101;derp3.tailscale.com|3478|10102;derp4.tailscale.com|3478|10103;derp5.tailscale.com|3478|10104;derp6.tailscale.com|3478|10105;derp7.tailscale.com|3478|10106;derp8.tailscale.com|3478|10107;derp9.tailscale.com|3478|10108;derp10.tailscale.com|3478|10109;derp11.tailscale.com|3478|10110;derp12.tailscale.com|3478|10111"
+      OPENCLAW_UDP_MAPPINGS: "derp1.tailscale.com|3478|10100;derp2.tailscale.com|3478|10101;derp3.tailscale.com|3478|10102;derp4.tailscale.com|3478|10103;derp5.tailscale.com|3478|10104;derp6.tailscale.com|3478|10105;derp7.tailscale.com|3478|10106;derp8.tailscale.com|3478|10107;derp9.tailscale.com|3478|10108;derp10.tailscale.com|3478|10109;derp11.tailscale.com|3478|10110;derp12.tailscale.com|3478|10111;derp13.tailscale.com|3478|10112;derp14.tailscale.com|3478|10113;derp15.tailscale.com|3478|10114;derp16.tailscale.com|3478|10115;derp17.tailscale.com|3478|10116;derp18.tailscale.com|3478|10117;derp19.tailscale.com|3478|10118;derp20.tailscale.com|3478|10119;derp21.tailscale.com|3478|10120;derp22.tailscale.com|3478|10121;derp23.tailscale.com|3478|10122;derp24.tailscale.com|3478|10123;derp25.tailscale.com|3478|10124;derp26.tailscale.com|3478|10125;derp27.tailscale.com|3478|10126;derp28.tailscale.com|3478|10127"
     dns:
       - 172.28.0.2
     networks:
@@ -52,6 +52,8 @@ services:
     restart: unless-stopped
     command: ["openclaw", "gateway", "--tailscale", "serve", "--port", "18789"]
     volumes:
+      - openclaw-home:/home/node
+      - openclaw-linuxbrew:/home/linuxbrew/.linuxbrew
       - ${OPENCLAW_CONFIG_DIR:-./data/config}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR:-./data/workspace}:/home/node/.openclaw/workspace
       - ./data/tailscale:/var/lib/tailscale
@@ -85,6 +87,8 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       BROWSER: echo
     volumes:
+      - openclaw-home:/home/node
+      - openclaw-linuxbrew:/home/linuxbrew/.linuxbrew
       - ${OPENCLAW_CONFIG_DIR:-./data/config}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR:-./data/workspace}:/home/node/.openclaw/workspace
     stdin_open: true
@@ -93,6 +97,10 @@ services:
     entrypoint: ["openclaw"]
     profiles:
       - cli
+
+volumes:
+  openclaw-home:
+  openclaw-linuxbrew:
 
 networks:
   openclaw-internal:

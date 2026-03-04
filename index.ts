@@ -100,7 +100,7 @@ const gatewayInstances = gateways.map((gw) => {
   const manualToken = cfg.getSecret(`gatewayToken-${gw.profile}`);
   const generatedToken = new random.RandomPassword(
     `gateway-token-${gw.profile}`,
-    { length: 32, special: false },
+    { length: 32, special: false, upper: false },
   );
   const token = manualToken ?? generatedToken.result;
 
@@ -134,13 +134,39 @@ const gatewayInstances = gateways.map((gw) => {
 export const serverIp = server.ipAddress;
 export const envoyIp = envoy.envoyIP;
 export const envoyWarnings = envoy.warnings;
-export const gatewayUrls = gatewayInstances.map((g) => g.gateway.tailscaleUrl);
-export const gatewayTokens = pulumi.secret(
+
+// Per-gateway service URLs. The controlUi URL includes the gateway auth token as
+// a query parameter so operators can open the Control UI directly after deploy.
+//
+// Why token-in-URL: OpenClaw's trusted-proxy auth mode breaks CLI→gateway calls
+// (the CLI credential resolver skips token when mode=trusted-proxy), and Tailscale
+// header auth short-circuits the token check causing device identity/pairing failures.
+// Token mode with allowTailscale=false + dangerouslyDisableDeviceAuth=true is the
+// only working auth strategy for headless Tailscale Serve deployments.
+//
+// Security mitigations for including the token in the URL:
+// 1. pulumi.secret() — the entire output is encrypted in Pulumi state and masked
+//    in `pulumi up` logs. Only `pulumi stack output --show-secrets` reveals it.
+// 2. Tailscale Serve — the gateway is only reachable within the operator's tailnet.
+//    An attacker needs both the token AND authenticated Tailscale access.
+// 3. Token auth mode — gateway.auth.allowTailscale=false prevents Tailscale header
+//    auth from bypassing the token check. The token is the sole auth credential.
+export const gatewayServices = pulumi.secret(
   pulumi.all(
     gatewayInstances.map((g, i) =>
       pulumi
-        .output(g.token)
-        .apply((t) => ({ profile: gateways[i].profile, token: t })),
+        .all([g.gateway.tailscaleUrl, pulumi.output(g.token)])
+        .apply(([url, token]) => ({
+          profile: gateways[i].profile,
+          controlUi: `${url}/openclaw?token=${token}`,
+          shell: `${url}/shell`,
+          files: `${url}/files`,
+        })),
     ),
   ),
+);
+
+// Remind users how to retrieve their gateway URLs (secret outputs are masked in console).
+pulumi.log.info(
+  "To view gateway URLs: pulumi stack output gatewayServices --show-secrets",
 );

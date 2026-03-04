@@ -18,9 +18,9 @@ export interface EgressRule {
 import { PROVIDERS } from "./defaults";
 export type VpsProvider = (typeof PROVIDERS)[number];
 
-// Custom Dockerfile RUN instructions (placed after openclaw install, before entrypoint COPY)
+// Custom Dockerfile RUN instructions (placed after openclaw install, before entrypoint COPY).
+// Always run as root — user-mode package managers are installed at runtime via home mount.
 export interface ImageStep {
-  user: "root" | "node";
   run: string;
 }
 

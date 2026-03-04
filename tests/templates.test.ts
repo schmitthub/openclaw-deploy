@@ -56,11 +56,25 @@ describe("renderDockerfile", () => {
     expect(df).toContain("cp /root/.bun/bin/bun /usr/local/bin/bun");
   });
 
-  it("installs Homebrew as node user", () => {
+  it("installs Homebrew via linuxbrew user with ENV vars and Library symlink", () => {
     const df = renderDockerfile(defaultOpts);
-    // Must switch to node user for brew install
-    expect(df).toMatch(/USER node[\s\S]*Homebrew\/install[\s\S]*USER root/);
-    expect(df).toContain("/home/linuxbrew/.linuxbrew/bin");
+    // ENV vars set before install
+    expect(df).toContain("HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew");
+    expect(df).toContain("HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar");
+    expect(df).toContain(
+      "HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew",
+    );
+    // Install via su - linuxbrew with CI=1
+    expect(df).toContain("su - linuxbrew");
+    expect(df).toContain("CI=1");
+    // Library symlink at prefix level
+    expect(df).toContain(
+      'ln -s "/home/linuxbrew/.linuxbrew/Homebrew/Library" "/home/linuxbrew/.linuxbrew/Library"',
+    );
+    // Verification check
+    expect(df).toContain("brew install failed");
+    // node user must be in linuxbrew group for write access
+    expect(df).toContain("usermod -aG linuxbrew node");
   });
 
   it("installs uv as node user", () => {
@@ -81,15 +95,11 @@ describe("renderDockerfile", () => {
     expect(df).toContain('ENTRYPOINT ["entrypoint.sh"]');
   });
 
-  it("sets CMD to openclaw gateway with port only (no --bind, no --tailscale)", () => {
+  it("sets CMD to openclaw gateway with --bind loopback --tailscale serve and port", () => {
     const df = renderDockerfile(defaultOpts);
     expect(df).toContain(
-      `CMD ["openclaw", "gateway", "--port", "${DEFAULT_GATEWAY_PORT}"]`,
+      `CMD ["openclaw", "gateway", "--bind", "loopback", "--tailscale", "serve", "--port", "${DEFAULT_GATEWAY_PORT}"]`,
     );
-    // Must NOT contain --bind or --tailscale in CMD
-    const cmdLine = df.split("\n").find((l) => l.startsWith("CMD "));
-    expect(cmdLine).not.toContain("--bind");
-    expect(cmdLine).not.toContain("--tailscale");
   });
 
   it("uses default config dir when not specified", () => {
@@ -195,35 +205,28 @@ describe("renderDockerfile", () => {
   });
 
   describe("imageSteps", () => {
-    it("renders imageSteps as USER+RUN pairs", () => {
+    it("renders imageSteps as RUN instructions (always root)", () => {
       const df = renderDockerfile({
         version: "latest",
         imageSteps: [
-          { user: "root", run: "apt-get install -y ffmpeg" },
-          { user: "node", run: "npm install -g some-tool" },
+          { run: "apt-get install -y ffmpeg" },
+          { run: "apt-get install -y some-lib" },
         ],
       });
-      expect(df).toContain("USER root\nRUN apt-get install -y ffmpeg");
-      expect(df).toContain("USER node\nRUN npm install -g some-tool");
-    });
-
-    it("restores USER root after imageSteps for entrypoint COPY", () => {
-      const df = renderDockerfile({
-        version: "latest",
-        imageSteps: [{ user: "node", run: "echo hello" }],
-      });
-      // After imageSteps, should have USER root before COPY
-      const stepsIdx = df.indexOf("RUN echo hello");
-      const userRootIdx = df.indexOf("USER root", stepsIdx);
-      const copyIdx = df.indexOf("COPY entrypoint.sh", stepsIdx);
-      expect(userRootIdx).toBeGreaterThan(stepsIdx);
-      expect(copyIdx).toBeGreaterThan(userRootIdx);
+      expect(df).toContain("RUN apt-get install -y ffmpeg");
+      expect(df).toContain("RUN apt-get install -y some-lib");
+      // Should not have USER directives from imageSteps (they always run as root)
+      const stepsSection = df.substring(
+        df.indexOf("RUN apt-get install -y ffmpeg"),
+        df.indexOf("COPY entrypoint.sh"),
+      );
+      expect(stepsSection).not.toContain("USER node");
     });
 
     it("places imageSteps after openclaw install and before entrypoint COPY", () => {
       const df = renderDockerfile({
         version: "latest",
-        imageSteps: [{ user: "root", run: "echo custom-step" }],
+        imageSteps: [{ run: "echo custom-step" }],
       });
       const openclawIdx = df.indexOf("npm install -g --no-fund --no-audit");
       const customIdx = df.indexOf("echo custom-step");
@@ -454,17 +457,15 @@ describe("renderEntrypoint", () => {
       expect(ep).toContain("--tun=userspace-networking");
     });
 
-    it("waits for daemon to be ready", () => {
+    it("waits for daemon socket to appear", () => {
       expect(ep).toContain("seq 1 30");
-      expect(ep).toContain(
-        "tailscale --socket=/var/run/tailscale/tailscaled.sock status",
-      );
+      expect(ep).toContain("[ -S /var/run/tailscale/tailscaled.sock ]");
     });
 
-    it("authenticates with TAILSCALE_AUTHKEY and --ssh flag", () => {
+    it("authenticates with TAILSCALE_AUTHKEY and --reset flag", () => {
       expect(ep).toContain("${TAILSCALE_AUTHKEY:-}");
       expect(ep).toContain(
-        'tailscale --socket=/var/run/tailscale/tailscaled.sock up --authkey="$TAILSCALE_AUTHKEY" --ssh',
+        'tailscale --socket=/var/run/tailscale/tailscaled.sock up --authkey="$TAILSCALE_AUTHKEY" --reset',
       );
     });
 
@@ -494,7 +495,7 @@ describe("renderEntrypoint", () => {
   describe("web tools", () => {
     it("starts ttyd on loopback", () => {
       expect(ep).toContain(
-        `gosu node ttyd --port ${TTYD_PORT} --interface lo --writable bash`,
+        `ttyd --port ${TTYD_PORT} --interface lo --writable bash`,
       );
     });
 
@@ -511,14 +512,14 @@ describe("renderEntrypoint", () => {
 
     it("web tools start AFTER tailscale", () => {
       const tailscaleSetIdx = ep.indexOf("set --ssh --operator=node");
-      const ttydIdx = ep.indexOf("gosu node ttyd");
+      const ttydIdx = ep.indexOf("ttyd --port");
       expect(tailscaleSetIdx).toBeGreaterThan(-1);
       expect(ttydIdx).toBeGreaterThan(-1);
       expect(ttydIdx).toBeGreaterThan(tailscaleSetIdx);
     });
 
     it("web tools start BEFORE exec gosu node", () => {
-      const ttydIdx = ep.indexOf("gosu node ttyd");
+      const ttydIdx = ep.indexOf("ttyd --port");
       const gosuIdx = ep.indexOf('exec gosu node "$@"');
       expect(ttydIdx).toBeGreaterThan(-1);
       expect(gosuIdx).toBeGreaterThan(-1);

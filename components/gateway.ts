@@ -104,12 +104,20 @@ export class Gateway extends pulumi.ComponentResource {
     // Step 2: Build Docker image on the remote host via docker build command.
     // Cannot use docker.Image because it validates the Dockerfile path locally
     // during preview, but the build context only exists on the remote host.
+    // Content hash in the --label forces Pulumi to re-run when Dockerfile or
+    // entrypoint.sh content changes (Pulumi only diffs the command string).
     const imageName = `openclaw-gateway-${args.profile}:${args.version}`;
+    const buildContextHash = crypto
+      .createHash("sha256")
+      .update(dockerfile)
+      .update(entrypoint)
+      .digest("hex")
+      .slice(0, 12);
     const buildImage = new command.remote.Command(
       `${name}-build-image`,
       {
         connection: args.connection,
-        create: `docker build -t ${imageName} ${buildDir}`,
+        create: `DOCKER_BUILDKIT=1 docker build --label openclaw.build-hash=${buildContextHash} -t ${imageName} ${buildDir}`,
         delete: `docker rmi ${imageName} 2>/dev/null; true`,
       },
       {
@@ -118,15 +126,28 @@ export class Gateway extends pulumi.ComponentResource {
       },
     );
 
-    // Step 3: Create host directories for persistent data
+    // Step 3: Create host directories for bind-mounted persistent data
     const createDirs = new command.remote.Command(
       `${name}-dirs`,
       {
         connection: args.connection,
-        create: `mkdir -p ${dataDir}/{config,workspace,config/identity,tailscale} && chown -R 1000:1000 ${dataDir}`,
+        create: `mkdir -p ${dataDir}/{config,workspace,config/identity,config/agents/main/agent,config/agents/main/sessions,tailscale} && chown -R 1000:1000 ${dataDir}/config ${dataDir}/workspace`,
         delete: `rm -rf ${dataDir}`,
       },
       { parent: this },
+    );
+
+    // Named Docker volumes for home and linuxbrew — auto-populated from the
+    // image on first use, persist across container recreations. No seed step needed.
+    const homeVolume = new docker.Volume(
+      `${name}-home`,
+      { name: `openclaw-home-${args.profile}` },
+      { parent: this, provider: dockerProvider },
+    );
+    const linuxbrewVolume = new docker.Volume(
+      `${name}-linuxbrew`,
+      { name: `openclaw-linuxbrew-${args.profile}` },
+      { parent: this, provider: dockerProvider },
     );
 
     // Step 4: Write config to shared volume via ephemeral CLI container.
@@ -161,9 +182,11 @@ export class Gateway extends pulumi.ComponentResource {
             let secrets: Record<string, string>;
             try {
               secrets = JSON.parse(secretJson) as Record<string, string>;
-            } catch {
+            } catch (e) {
+              const detail = e instanceof Error ? e.message : String(e);
               throw new Error(
-                `Invalid JSON in gatewaySecretEnv-${args.profile}: expected {"KEY":"value",...}`,
+                `Invalid JSON in gatewaySecretEnv-${args.profile}: ${detail}. Expected {"KEY":"value",...}`,
+                { cause: e },
               );
             }
             // Include gateway token so setupCommands can reference $OPENCLAW_GATEWAY_TOKEN
@@ -193,11 +216,16 @@ export class Gateway extends pulumi.ComponentResource {
       {
         connection: args.connection,
         create: [
-          `echo '${encodedInitScript}' | base64 -d > ${dataDir}/.init.sh`,
+          // Skip init if gateway is already configured (token exists in config file on host).
+          // Requires jq on the host (installed by HostBootstrap).
+          `if jq -e '.gateway.auth.token // empty' ${dataDir}/config/openclaw.json >/dev/null 2>&1;`,
+          `then echo "Gateway already configured (token found), skipping init."; echo "To force re-init: rm ${dataDir}/config/openclaw.json on the host"; exit 0; fi`,
+          `&& echo '${encodedInitScript}' | base64 -d > ${dataDir}/.init.sh`,
           `&&`,
           `docker run --rm --network none --user node`,
           `--entrypoint /bin/sh`,
           `--env-file ${envFile}`,
+          `-v openclaw-home-${args.profile}:/home/node`,
           `-v ${dataDir}/config:${DEFAULT_OPENCLAW_CONFIG_DIR}`,
           `-v ${dataDir}/workspace:${DEFAULT_OPENCLAW_WORKSPACE_DIR}`,
           `-v ${dataDir}/.init.sh:/tmp/init.sh:ro`,
@@ -251,9 +279,11 @@ export class Gateway extends pulumi.ComponentResource {
     const secretEnvParsed = pulumi.output(args.secretEnv ?? "{}").apply((s) => {
       try {
         return JSON.parse(s) as Record<string, string>;
-      } catch {
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
         throw new Error(
-          `Invalid JSON in gatewaySecretEnv-${args.profile}: expected {"KEY":"value",...}`,
+          `Invalid JSON in gatewaySecretEnv-${args.profile}: ${detail}. Expected {"KEY":"value",...}`,
+          { cause: e },
         );
       }
     });
@@ -296,8 +326,16 @@ export class Gateway extends pulumi.ComponentResource {
           .map(([k, v]) => `${k}=${v}`),
       ]);
 
-    // Build volumes list
+    // Build volumes list — named volumes first, then bind mount overlays on top
     const volumes: docker.types.input.ContainerVolume[] = [
+      {
+        volumeName: homeVolume.name,
+        containerPath: "/home/node",
+      },
+      {
+        volumeName: linuxbrewVolume.name,
+        containerPath: "/home/linuxbrew/.linuxbrew",
+      },
       {
         hostPath: `${dataDir}/config`,
         containerPath: DEFAULT_OPENCLAW_CONFIG_DIR,
@@ -317,7 +355,9 @@ export class Gateway extends pulumi.ComponentResource {
       },
     ];
 
-    // CMD: openclaw gateway --port <port> (no --bind, no --tailscale — config handles those)
+    // Container command overrides Dockerfile CMD — only --port is passed here.
+    // --bind and --tailscale are omitted because onboard setupCommands configure those
+    // in openclaw.json (gateway.bind, gateway.tailscale). CLI flags would conflict.
     const containerCommand = ["openclaw", "gateway", "--port", `${args.port}`];
 
     // Content hash of init script + Dockerfile — forces container replacement
@@ -340,6 +380,18 @@ export class Gateway extends pulumi.ComponentResource {
         dns: [ENVOY_STATIC_IP],
         envs: computedEnvs,
         command: containerCommand,
+        healthcheck: {
+          tests: [
+            "CMD",
+            "node",
+            "-e",
+            `fetch('http://127.0.0.1:${args.port}/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))`,
+          ],
+          interval: "30s",
+          timeout: "5s",
+          retries: 5,
+          startPeriod: "20s",
+        },
         volumes,
         networksAdvanced: [{ name: args.internalNetworkName }],
         labels: [{ label: "openclaw.init-hash", value: contentHash }],
