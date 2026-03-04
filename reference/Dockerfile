@@ -10,9 +10,11 @@ FROM node:22-bookworm
 RUN groupmod -g 1000 node && usermod -u 1000 node
 
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+# Note: iptables and iproute2 are NOT needed — the sidecar handles networking.
+# Tailscale CLI is still needed for 'tailscale serve' commands in entrypoint.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      iptables iproute2 gosu libsecret-tools build-essential ripgrep jq \
+      gosu libsecret-tools build-essential ripgrep jq \
       $OPENCLAW_DOCKER_APT_PACKAGES && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
@@ -59,7 +61,8 @@ RUN echo 'export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH' >> /home/node/.bashr
     echo 'export HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew' >> /home/node/.bashrc
 USER root
 
-# Install Tailscale (used for gateway ingress via tailscale serve/funnel).
+# Install Tailscale CLI (used for 'tailscale serve' path configuration).
+# tailscaled runs in the sidecar container, not here.
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
 # Install ttyd (web terminal) and filebrowser (web file manager).
@@ -76,7 +79,7 @@ ENV OPENCLAW_CONFIG_DIR=/home/node/.openclaw
 ENV OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace
 ENV OPENCLAW_GATEWAY_PORT=18789
 ENV OPENCLAW_BRIDGE_PORT=18790
-ENV OPENCLAW_GATEWAY_BIND=lan
+ENV OPENCLAW_GATEWAY_BIND=loopback
 
 # Create config and workspace directories (700 = owner-only, per openclaw doctor)
 RUN mkdir -p "${OPENCLAW_CONFIG_DIR}" "${OPENCLAW_WORKSPACE_DIR}" && \
@@ -121,4 +124,4 @@ ENV OPENCLAW_NO_RESPAWN=1
 ENV NODE_COMPILE_CACHE=/home/node/.node-compile-cache
 
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["openclaw", "gateway", "--bind", "loopback", "--tailscale", "serve", "--port", "18789"]
+CMD ["openclaw", "gateway", "--port", "18789"]

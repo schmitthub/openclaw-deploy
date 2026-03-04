@@ -2,20 +2,17 @@
 #   - internal network (internal: true, no default internet route)
 #   - egress network (Envoy's internet path)
 #   - Envoy on both networks (sole bridge, SNI whitelist, DNS forwarder)
-#   - Gateway on internal only (entrypoint adds route via Envoy, sets iptables)
-#   - Tailscale inside gateway container (serve mode, userspace networking)
+#   - Tailscale sidecar on internal only (owns netns, runs iptables + tailscaled)
+#   - Gateway shares sidecar's netns (network_mode: container:tailscale-sidecar)
 #   - CLI service for running config/onboard commands (standalone, no network dep)
 
 services:
   envoy:
     image: envoyproxy/envoy:v1.33-latest
     restart: unless-stopped
-    sysctls:
-      - net.ipv4.ip_unprivileged_port_start=53
-    networks:
-      openclaw-internal:
-        ipv4_address: 172.28.0.2
-      openclaw-egress: {}
+    environment:
+      ENVOY_UID: ${ENVOY_UID:-101}
+    network_mode: service:tailscale-sidecar
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     healthcheck:
@@ -24,18 +21,48 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+    depends_on:
+      tailscale-sidecar:
+        condition: service_healthy
+
+  # Tailscale sidecar — owns the network namespace shared with the gateway.
+  # Handles all networking: iptables DNAT to Envoy, UDP owner-match, tailscaled.
+  tailscale-sidecar:
+    image: tailscale/tailscale:v1.94.2
+    hostname: openclaw
+    cap_add:
+      - NET_ADMIN
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: false
+      TS_SERVE_CONFIG: /config/serve-config.json
+      TS_ENABLE_HEALTH_CHECK: "true"
+    restart: unless-stopped
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ${PWD}/ts-config/config:/config
+      - ${PWD}/sidecar-entrypoint.sh:/usr/local/bin/sidecar-entrypoint.sh:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    entrypoint: ["sidecar-entrypoint.sh"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:9002/healthz || wget -q --spider http://127.0.0.1:9002/healthz",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 45s
 
   openclaw-gateway:
     build:
       context: .
       dockerfile: Dockerfile
     image: openclaw-gateway:local
-    cap_add:
-      - NET_ADMIN
-    sysctls:
-      - net.ipv4.tcp_keepalive_time=60
-      - net.ipv4.tcp_keepalive_intvl=10
-      - net.ipv4.tcp_keepalive_probes=3
+    network_mode: service:tailscale-sidecar
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -45,22 +72,16 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_USER_ID: ${DISCORD_USER_ID:-}
       DISCORD_SERVER_ID: ${DISCORD_SERVER_ID:-}
-      TAILSCALE_AUTHKEY: ${TAILSCALE_DEVICE_KEY:-}
-      TS_SOCKET: /var/run/tailscale/tailscaled.sock
-      OPENCLAW_UDP_MAPPINGS: "derp1.tailscale.com|3478|10100;derp2.tailscale.com|3478|10101;derp3.tailscale.com|3478|10102;derp4.tailscale.com|3478|10103;derp5.tailscale.com|3478|10104;derp6.tailscale.com|3478|10105;derp7.tailscale.com|3478|10106;derp8.tailscale.com|3478|10107;derp9.tailscale.com|3478|10108;derp10.tailscale.com|3478|10109;derp11.tailscale.com|3478|10110;derp12.tailscale.com|3478|10111;derp13.tailscale.com|3478|10112;derp14.tailscale.com|3478|10113;derp15.tailscale.com|3478|10114;derp16.tailscale.com|3478|10115;derp17.tailscale.com|3478|10116;derp18.tailscale.com|3478|10117;derp19.tailscale.com|3478|10118;derp20.tailscale.com|3478|10119;derp21.tailscale.com|3478|10120;derp22.tailscale.com|3478|10121;derp23.tailscale.com|3478|10122;derp24.tailscale.com|3478|10123;derp25.tailscale.com|3478|10124;derp26.tailscale.com|3478|10125;derp27.tailscale.com|3478|10126;derp28.tailscale.com|3478|10127"
-    dns:
-      - 172.28.0.2
-    networks:
-      openclaw-internal: {}
+      # TS_SOCKET: /var/run/tailscale/tailscaled.sock
     init: true
     restart: unless-stopped
-    command: ["openclaw", "gateway", "--tailscale", "serve", "--port", "18789"]
+    command: ["openclaw", "gateway", "--bind", "loopback", "--port", "18789"]
     volumes:
       - openclaw-home:/home/node
       - openclaw-linuxbrew:/home/linuxbrew/.linuxbrew
       - ${OPENCLAW_CONFIG_DIR:-./data/config}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR:-./data/workspace}:/home/node/.openclaw/workspace
-      - ./data/tailscale:/var/lib/tailscale
+      # - tailscale-socket:/var/run/tailscale
     healthcheck:
       test:
         [
@@ -74,7 +95,7 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      envoy:
+      tailscale-sidecar:
         condition: service_healthy
 
   # Standalone CLI for running config/onboard commands against shared volumes.
@@ -105,13 +126,4 @@ services:
 volumes:
   openclaw-home:
   openclaw-linuxbrew:
-
-networks:
-  openclaw-internal:
-    internal: true
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/24
-  openclaw-egress:
-    driver: bridge
+  tailscale-state:
