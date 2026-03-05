@@ -1,7 +1,7 @@
 # Mirrors the VPS deployment topology:
 #   - internal network (internal: true, no default internet route)
 #   - egress network (Envoy's internet path)
-#   - Envoy on both networks (sole bridge, SNI whitelist, DNS forwarder)
+#   - Envoy on both networks (sole bridge, SNI whitelist for TCP egress)
 #   - Tailscale sidecar on internal only (owns netns, runs iptables + tailscaled)
 #   - Gateway shares sidecar's netns (network_mode: container:tailscale-sidecar)
 #   - CLI service for running config/onboard commands (standalone, no network dep)
@@ -45,6 +45,9 @@ services:
       - ${PWD}/sidecar-entrypoint.sh:/usr/local/bin/sidecar-entrypoint.sh:ro
     devices:
       - /dev/net/tun:/dev/net/tun
+    dns:
+      - 1.1.1.2
+      - 1.0.0.2
     entrypoint: ["sidecar-entrypoint.sh"]
     healthcheck:
       test:
@@ -96,6 +99,8 @@ services:
       start_period: 20s
     depends_on:
       tailscale-sidecar:
+        condition: service_healthy
+      envoy:
         condition: service_healthy
 
   # Standalone CLI for running config/onboard commands against shared volumes.

@@ -11,16 +11,10 @@ iptables -t nat -A OUTPUT -p tcp -m owner --uid-owner 0 -j RETURN
 iptables -t nat -A OUTPUT -p tcp ! -d 127.0.0.0/8 -j REDIRECT --to-ports 10000
 
 
-# Allow DNS to localhost (envoy's listener)
-iptables -A OUTPUT -p udp -d 127.0.0.0/8 --dport 53 -j ACCEPT
-
-# UDP: only tailscaled (root) can send
+# UDP: tailscaled only + DNS for everyone
+# Allow DNS through Docker's embedded resolver (port gets rewritten by DNAT)
+iptables -A OUTPUT -p udp -d 127.0.0.11 -j ACCEPT
 iptables -A OUTPUT -p udp -m owner --uid-owner root -j ACCEPT
-
-# Envoy upstream DNS
-iptables -A OUTPUT -p udp --dport 53 -m owner --uid-owner ${ENVOY_UID:-101} -j ACCEPT
-
-# Block everything else
 iptables -A OUTPUT -p udp -j DROP
 
 # Hand off to the real tailscale entrypoint
