@@ -1,39 +1,67 @@
-# Example stack configuration for a dev server.
-#
-# Before running `pulumi up`, set required secrets:
-#   pulumi config set --secret tailscaleAuthKey <your-tailscale-auth-key>
-#
-# Optional: set secret env vars for gateway setup commands and runtime:
-#   pulumi config set --secret gatewaySecretEnv-dev '{"ANTHROPIC_API_KEY":"sk-ant-..."}'
-#
-# Gateway auth tokens are auto-generated and stored in Pulumi state.
-# To override: pulumi config set --secret gatewayToken-<profile> <token>
-
 config:
   openclaw-deploy:provider: hetzner
-  openclaw-deploy:serverType: cx22
-  openclaw-deploy:region: fsn1
-  # openclaw-deploy:sshKeyId: "12345"  # Optional: auto-generates ED25519 SSH key if omitted
-  openclaw-deploy:egressPolicy: []
+  openclaw-deploy:serverType: cx23
+  openclaw-deploy:region: nbg1
+  openclaw-deploy:egressPolicy:
+    - action: allow
+      dst: pythonhosted.org
+      proto: tls
+    - action: allow
+      dst: "*.pythonhosted.org"
+      proto: tls
+    - action: allow
+      dst: "*.pypi.org"
+      proto: tls
+    - action: allow
+      dst: pypi.org
+      proto: tls
+    - action: allow
+      dst: discord.com
+      proto: tls
+    - action: allow
+      dst: gateway.discord.gg
+      proto: tls
+    - action: allow
+      dst: cdn.discordapp.com
+      proto: tls
+    - action: allow
+      dst: proxy.golang.org
+      proto: tls
+    - action: allow
+      dst: sum.golang.org
+      proto: tls
+    - action: allow
+      dst: storage.googleapis.com
+      proto: tls
+    - action: allow
+      dst: api.telegram.org
+      proto: tls
+    - action: allow
+      dst: "*.x.com"
+      proto: tls
+    - action: allow
+      dst: "*.twimg.com"
+      proto: tls
+    - action: allow
+      dst: x.com
+      proto: tls
+    - action: allow
+      dst: twitter.com
+      proto: tls
   openclaw-deploy:gateways:
-    - profile: dev
+    - profile: main
       version: latest
       port: 18789
-      # installBrowser: true  # Installs Chromium + Xvfb; auto-sets browser.headless & browser.noSandbox
+      installBrowser: true
       setupCommands:
         - >-
-          onboard --non-interactive --accept-risk
-          --mode local --gateway-bind loopback
-          --gateway-token "$OPENCLAW_GATEWAY_TOKEN"
-          --no-install-daemon --node-manager pnpm
-          --auth-choice token --token-provider anthropic --token "$ANTHROPIC_API_KEY"
-          # OpenRouter: --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY"
-          # OpenAI:     --auth-choice openai-api-key --openai-api-key "$OPENAI_API_KEY"
-          --skip-channels --skip-skills --skip-daemon --skip-health
-        - config set gateway.auth.allowTailscale true
-        - config set skills.install.nodeManager pnpm
+          onboard --non-interactive --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health
         - config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
+        - config set gateway.auth.allowTailscale true
         - config set gateway.controlUi.dangerouslyDisableDeviceAuth true
+        - config set gateway.trustedProxies "[\"127.0.0.1/8\"]"
+        - config set tools.profile full
+        - config set skills.install.nodeManager pnpm
         - config set agents.defaults.memorySearch.provider openai
         - 'config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
         - 'config set agents.defaults.memorySearch.remote.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"OPENROUTER_API_KEY\"}"'
@@ -45,7 +73,9 @@ config:
         - config set channels.discord.dmPolicy allowlist
         - config set channels.discord.groupPolicy allowlist
         - 'config set channels.discord.guilds "{\"$DISCORD_SERVER_ID\": {\"users\": [\"$DISCORD_USER_ID\"], \"requireMention\": false}}"'
-        - config set gateway.trustedProxies '["127.0.0.1/8"]'
-        - config set tools.exec.host gateway
-  openclaw-deploy:gatewaySecretEnv-dev:
-    secure: <encrypted>  # JSON: {"ANTHROPIC_API_KEY":"sk-ant-..."}
+        - config set channels.telegram.botToken "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"TELEGRAM_BOT_TOKEN\"}"
+        - config set channels.telegram.allowFrom "[\"$TELEGRAM_USER_ID\"]"
+        - config set channels.telegram.dmPolicy allowlist
+        - config set approvals.exec.enabled true
+        - config set approvals.exec.mode targets
+        - config set approvals.exec.targets "[{\"channel\":\"telegram\",\"to\":\"$TELEGRAM_USER_ID\"}]"
