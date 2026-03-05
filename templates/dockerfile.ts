@@ -49,7 +49,9 @@ RUN mkdir -p /run/sshd && \\
     sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords yes/' /etc/ssh/sshd_config && \\
     sed -i 's/UsePAM yes/UsePAM no/' /etc/ssh/sshd_config && \\
     passwd -d root && \\
-    ssh-keygen -A
+    ssh-keygen -A && \\
+    chown root:root /usr/bin/ssh && \\
+    chmod 700 /usr/bin/ssh
 
 # Install Bun (required for build scripts).
 # Binary copied to /usr/local/bin/ so node user can access it at runtime.

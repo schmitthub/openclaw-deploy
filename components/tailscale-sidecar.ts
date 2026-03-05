@@ -94,7 +94,7 @@ export class TailscaleSidecar extends pulumi.ComponentResource {
           `echo '${encodedSidecar}' | base64 -d > ${bDir}/sidecar-entrypoint.sh`,
           `echo '${encodedServeConfig}' | base64 -d > ${bDir}/serve-config.json`,
           `chmod 755 ${bDir}/sidecar-entrypoint.sh`,
-          `# content-hash=${sidecarContentHash}`,
+          `true # content-hash=${sidecarContentHash}`,
         ].join(" && "),
         delete: `rm -f ${bDir}/sidecar-entrypoint.sh ${bDir}/serve-config.json`,
       },
