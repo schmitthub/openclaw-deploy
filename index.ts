@@ -1,6 +1,12 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as random from "@pulumi/random";
-import { Server, HostBootstrap, EnvoyEgress, Gateway } from "./components";
+import {
+  Server,
+  HostBootstrap,
+  EnvoyEgress,
+  GatewayImage,
+  Gateway,
+} from "./components";
 import type { EgressRule, GatewayConfig, VpsProvider } from "./config/types";
 import { PROVIDERS } from "./config/defaults";
 
@@ -104,16 +110,28 @@ const gatewayInstances = gateways.map((gw) => {
   const token = manualToken ?? generatedToken.result;
 
   const secretEnv = cfg.getSecret(`gatewaySecretEnv-${gw.profile}`);
+
+  // Build image via BuildKit (content-aware, no manual hash hacks)
+  const image = new GatewayImage(
+    `gateway-image-${gw.profile}`,
+    {
+      dockerHost: bootstrap.dockerHost,
+      profile: gw.profile,
+      version: gw.version,
+      installBrowser: gw.installBrowser,
+      imageSteps: gw.imageSteps,
+    },
+    { dependsOn: [bootstrap] },
+  );
+
   const gateway = new Gateway(
     `gateway-${gw.profile}`,
     {
       dockerHost: bootstrap.dockerHost,
       connection: server.connection,
       profile: gw.profile,
-      version: gw.version,
       port: gw.port,
-      installBrowser: gw.installBrowser,
-      imageSteps: gw.imageSteps,
+      imageName: image.imageName,
       setupCommands: gw.setupCommands,
       env: gw.env,
       secretEnv,
@@ -124,7 +142,7 @@ const gatewayInstances = gateways.map((gw) => {
       envoyConfigHash: envoy.configHash,
       inspectedDomains: envoy.inspectedDomains,
     },
-    { dependsOn: [envoy] },
+    { dependsOn: [envoy, image] },
   );
   return { gateway, token };
 });

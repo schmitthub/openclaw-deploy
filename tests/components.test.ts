@@ -58,6 +58,11 @@ beforeAll(() => {
           state.fingerprint = state.fingerprint ?? "ab:cd:ef:12:34:56";
         }
 
+        // docker-build.Image — provide tags output
+        if (args.type === "docker-build:index:Image") {
+          state.tags = state.tags ?? [];
+        }
+
         // command.remote.Command — provide stdout/stderr
         if (args.type === "command:remote:Command") {
           state.stdout = state.stdout ?? "mock-stdout";
@@ -554,7 +559,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "dev",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       auth: { mode: "token", token: "test-token" },
       tailscaleAuthKey: "tskey-auth-test",
@@ -577,7 +582,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "prod",
-      version: "2026.2",
+      imageName: "openclaw-gateway-prod:2026.2",
       port: 18789,
       auth: { mode: "token", token: "prod-token" },
       tailscaleAuthKey: "tskey-auth-test",
@@ -596,7 +601,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "envtest",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       auth: { mode: "token", token: "test-token" },
       tailscaleAuthKey: "tskey-auth-test",
@@ -616,7 +621,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "setuptest",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       setupCommands: [
         'onboard --non-interactive --tailscale serve --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice token --token-provider anthropic --token "$ANTHROPIC_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health',
@@ -639,7 +644,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "secrettest",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       setupCommands: [
         'onboard --non-interactive --auth-choice token --token-provider openrouter --token "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health',
@@ -662,7 +667,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "tcptest",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       auth: { mode: "token", token: "test-token" },
       tailscaleAuthKey: "tskey-auth-test",
@@ -690,7 +695,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "reservedtest",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       auth: { mode: "token", token: "test-token" },
       tailscaleAuthKey: "tskey-auth-test",
@@ -713,7 +718,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "hash1",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       setupCommands: ["config set foo bar"],
       auth: { mode: "token", token: "test-token" },
@@ -727,7 +732,7 @@ describe("Gateway component", () => {
       dockerHost: "ssh://root@100.64.0.1",
       connection: { host: "100.64.0.1", user: "root" },
       profile: "hash2",
-      version: "latest",
+      imageName: "openclaw-gateway-dev:latest",
       port: 18789,
       setupCommands: ["config set baz qux"],
       auth: { mode: "token", token: "test-token" },
@@ -742,27 +747,34 @@ describe("Gateway component", () => {
     expect(id1).toBeDefined();
     expect(id2).toBeDefined();
   });
+});
+
+describe("GatewayImage component", () => {
+  it("creates a docker-build Image resource", async () => {
+    const { GatewayImage } = await import("../components/gateway-image");
+    const img = new GatewayImage("test-img", {
+      dockerHost: "ssh://root@100.64.0.1",
+      profile: "dev",
+      version: "latest",
+    });
+
+    const imageName = await promiseOf(img.imageName);
+    expect(imageName).toBe("openclaw-gateway-dev:latest");
+  });
 
   it("constructs with imageSteps without errors", async () => {
-    const { Gateway } = await import("../components/gateway");
-    const gw = new Gateway("test-gw-steps", {
+    const { GatewayImage } = await import("../components/gateway-image");
+    const img = new GatewayImage("test-img-steps", {
       dockerHost: "ssh://root@100.64.0.1",
-      connection: { host: "100.64.0.1", user: "root" },
       profile: "stepstest",
       version: "latest",
-      port: 18789,
-      auth: { mode: "token", token: "test-token" },
-      tailscaleAuthKey: "tskey-auth-test",
-      envoyConfigPath: "/opt/openclaw-deploy/envoy/envoy.yaml",
-      envoyConfigHash: "test-hash",
-      inspectedDomains: [],
       imageSteps: [
         { run: "apt-get install -y ffmpeg" },
         { run: "apt-get install -y some-lib" },
       ],
     });
 
-    const containerId = await promiseOf(gw.containerId);
-    expect(containerId).toBeDefined();
+    const imageName = await promiseOf(img.imageName);
+    expect(imageName).toBe("openclaw-gateway-stepstest:latest");
   });
 });

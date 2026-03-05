@@ -16,15 +16,14 @@ import {
   ENVOY_MITM_CERTS_HOST_DIR,
   ENVOY_MITM_CERTS_CONTAINER_DIR,
   SSHD_PORT,
+  buildDir,
+  dataDir,
 } from "../config";
 import {
-  renderDockerfile,
-  renderEntrypoint,
   renderSidecarEntrypoint,
   renderServeConfig,
   TcpPortMapping,
 } from "../templates";
-import type { ImageStep } from "../config/types";
 
 export interface GatewayArgs {
   /** Docker host URI, e.g. "ssh://root@<ip>" */
@@ -33,14 +32,10 @@ export interface GatewayArgs {
   connection: pulumi.Input<command.types.input.remote.ConnectionArgs>;
   /** Unique name for this gateway instance */
   profile: string;
-  /** OpenClaw version to install (npm dist-tag or semver) */
-  version: string;
   /** Host port for the gateway */
   port: number;
-  /** Bake Playwright + Chromium into the image (~300MB) */
-  installBrowser?: boolean;
-  /** Custom Dockerfile RUN instructions (after openclaw install, before entrypoint COPY) */
-  imageSteps?: ImageStep[];
+  /** Docker image tag for the gateway (from GatewayImage) */
+  imageName: pulumi.Input<string>;
   /** OpenClaw subcommands run in the init container (auto-prefixed with `openclaw `) */
   setupCommands?: string[];
   /** Additional env vars for the container */
@@ -74,16 +69,11 @@ export class Gateway extends pulumi.ComponentResource {
   ) {
     super("openclaw:app:Gateway", name, {}, opts);
 
-    const buildDir = `/opt/openclaw-deploy/build/${args.profile}`;
-    const dataDir = `/opt/openclaw-deploy/data/${args.profile}`;
+    const bDir = buildDir(args.profile);
+    const dDir = dataDir(args.profile);
 
-    // Render templates (pure functions, runs at plan time)
-    const dockerfile = renderDockerfile({
-      version: args.version,
-      installBrowser: args.installBrowser ?? false,
-      imageSteps: args.imageSteps,
-    });
-    const entrypoint = renderEntrypoint();
+    // Render sidecar templates (pure functions, runs at plan time).
+    // Dockerfile + entrypoint are now handled by GatewayImage.
     const sidecarEntrypoint = renderSidecarEntrypoint();
     const serveConfig = renderServeConfig(args.port, SSHD_PORT);
 
@@ -94,56 +84,42 @@ export class Gateway extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Step 1: Upload Dockerfile + entrypoint.sh + sidecar-entrypoint.sh + serve-config.json to server.
-    const encodedDockerfile = Buffer.from(dockerfile).toString("base64");
-    const encodedEntrypoint = Buffer.from(entrypoint).toString("base64");
+    // Upload sidecar files to the remote host (sidecar-entrypoint.sh + serve-config.json).
+    // Dockerfile + entrypoint.sh are handled by GatewayImage via BuildKit.
     const encodedSidecar = Buffer.from(sidecarEntrypoint).toString("base64");
     const encodedServeConfig = Buffer.from(serveConfig).toString("base64");
-    const uploadBuildContext = new command.remote.Command(
-      `${name}-upload-build`,
+    const sidecarContentHash = crypto
+      .createHash("sha256")
+      .update(sidecarEntrypoint)
+      .update(serveConfig)
+      .digest("hex")
+      .slice(0, 12);
+    const uploadSidecarFiles = new command.remote.Command(
+      `${name}-upload-sidecar`,
       {
         connection: args.connection,
         create: [
-          `mkdir -p ${buildDir}`,
-          `echo '${encodedDockerfile}' | base64 -d > ${buildDir}/Dockerfile`,
-          `echo '${encodedEntrypoint}' | base64 -d > ${buildDir}/entrypoint.sh`,
-          `echo '${encodedSidecar}' | base64 -d > ${buildDir}/sidecar-entrypoint.sh`,
-          `echo '${encodedServeConfig}' | base64 -d > ${buildDir}/serve-config.json`,
-          `chmod 755 ${buildDir}/entrypoint.sh ${buildDir}/sidecar-entrypoint.sh`,
+          `mkdir -p ${bDir}`,
+          `echo '${encodedSidecar}' | base64 -d > ${bDir}/sidecar-entrypoint.sh`,
+          `echo '${encodedServeConfig}' | base64 -d > ${bDir}/serve-config.json`,
+          `chmod 755 ${bDir}/sidecar-entrypoint.sh`,
+          `# content-hash=${sidecarContentHash}`,
         ].join(" && "),
-        delete: `rm -rf ${buildDir}`,
+        delete: `rm -f ${bDir}/sidecar-entrypoint.sh ${bDir}/serve-config.json`,
       },
       { parent: this },
     );
 
-    // Step 2: Build Docker image on the remote host.
-    const imageName = `openclaw-gateway-${args.profile}:${args.version}`;
-    const buildContextHash = crypto
-      .createHash("sha256")
-      .update(dockerfile)
-      .update(entrypoint)
-      .digest("hex")
-      .slice(0, 12);
-    const buildImage = new command.remote.Command(
-      `${name}-build-image`,
-      {
-        connection: args.connection,
-        create: `DOCKER_BUILDKIT=1 docker build --label openclaw.build-hash=${buildContextHash} -t ${imageName} ${buildDir}`,
-        delete: `docker rmi ${imageName} 2>/dev/null; true`,
-      },
-      {
-        parent: this,
-        dependsOn: [uploadBuildContext],
-      },
-    );
+    // Image name comes from GatewayImage component
+    const imageName = args.imageName;
 
     // Step 3: Create host directories for bind-mounted persistent data
     const createDirs = new command.remote.Command(
       `${name}-dirs`,
       {
         connection: args.connection,
-        create: `mkdir -p ${dataDir}/{config,workspace,config/identity,config/agents/main/agent,config/agents/main/sessions,tailscale} && chown -R 1000:1000 ${dataDir}/config ${dataDir}/workspace`,
-        delete: `rm -rf ${dataDir}`,
+        create: `mkdir -p ${dDir}/{config,workspace,config/identity,config/agents/main/agent,config/agents/main/sessions,tailscale} && chown -R 1000:1000 ${dDir}/config ${dDir}/workspace`,
+        delete: `rm -rf ${dDir}`,
       },
       { parent: this },
     );
@@ -182,7 +158,7 @@ export class Gateway extends pulumi.ComponentResource {
     const initScript = setupCmds.join("\n");
 
     // Step 4a: Write secret env file to host
-    const envFile = `${dataDir}/.init-env`;
+    const envFile = `${dDir}/.init-env`;
     const writeSecretEnv = new command.remote.Command(
       `${name}-write-secret-env`,
       {
@@ -217,53 +193,10 @@ export class Gateway extends pulumi.ComponentResource {
       },
       {
         parent: this,
-        dependsOn: [buildImage, createDirs],
+        dependsOn: [createDirs],
         additionalSecretOutputs: ["stdout", "stderr"],
       },
     );
-
-    // Step 4b: Run each setup command as an individual Pulumi resource.
-    const setupResources: command.remote.Command[] = [];
-
-    for (let i = 0; i < setupCmds.length; i++) {
-      const cmd = setupCmds[i];
-      const words = cmd.replace(/^openclaw\s+/, "").split(/\s+/);
-      const slug = words
-        .slice(0, 2)
-        .join("-")
-        .replace(/[^a-zA-Z0-9_-]/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 20);
-      const encoded = Buffer.from(cmd).toString("base64");
-
-      const setupResource = new command.remote.Command(
-        `${name}-setup-${i}-${slug}`,
-        {
-          connection: args.connection,
-          create: [
-            `docker run --rm --network none --user node`,
-            `--entrypoint /bin/sh`,
-            `--env-file ${envFile}`,
-            `-v openclaw-home-${args.profile}:/home/node`,
-            `-v ${dataDir}/config:${DEFAULT_OPENCLAW_CONFIG_DIR}`,
-            `-v ${dataDir}/workspace:${DEFAULT_OPENCLAW_WORKSPACE_DIR}`,
-            `${imageName} -c "set -e; echo '${encoded}' | base64 -d | sh -e"`,
-          ].join(" "),
-        },
-        {
-          parent: this,
-          dependsOn: [i === 0 ? writeSecretEnv : setupResources[i - 1]],
-          additionalSecretOutputs: ["stdout", "stderr"],
-        },
-      );
-      setupResources.push(setupResource);
-    }
-
-    const lastSetupDep =
-      setupResources.length > 0
-        ? setupResources[setupResources.length - 1]
-        : writeSecretEnv;
 
     // Step 5: Create the per-gateway bridge network.
     // NOT internal: true — the sidecar needs internet access for Envoy to reach upstreams.
@@ -319,7 +252,7 @@ export class Gateway extends pulumi.ComponentResource {
         ],
         dns: [CLOUDFLARE_DNS_PRIMARY, CLOUDFLARE_DNS_SECONDARY],
         envs: pulumi.all(sidecarEnvs),
-        entrypoints: [`${buildDir}/sidecar-entrypoint.sh`],
+        entrypoints: [`${bDir}/sidecar-entrypoint.sh`],
         healthcheck: {
           tests: [
             "CMD",
@@ -335,16 +268,16 @@ export class Gateway extends pulumi.ComponentResource {
         },
         volumes: [
           {
-            hostPath: `${buildDir}/sidecar-entrypoint.sh`,
-            containerPath: `${buildDir}/sidecar-entrypoint.sh`,
+            hostPath: `${bDir}/sidecar-entrypoint.sh`,
+            containerPath: `${bDir}/sidecar-entrypoint.sh`,
             readOnly: true,
           },
           {
-            hostPath: `${dataDir}/tailscale`,
+            hostPath: `${dDir}/tailscale`,
             containerPath: TAILSCALE_STATE_DIR,
           },
           {
-            hostPath: `${buildDir}/serve-config.json`,
+            hostPath: `${bDir}/serve-config.json`,
             containerPath: "/config/serve-config.json",
             readOnly: true,
           },
@@ -355,23 +288,71 @@ export class Gateway extends pulumi.ComponentResource {
       {
         parent: this,
         provider: dockerProvider,
-        dependsOn: [lastSetupDep, uploadBuildContext, bridgeNetwork],
+        dependsOn: [uploadSidecarFiles, bridgeNetwork],
         additionalSecretOutputs: ["envs"],
       },
     );
 
-    // Step 6b: Wait for sidecar to be healthy before creating envoy + gateway containers.
+    // Step 6b: Wait for sidecar to be healthy, capture Tailscale hostname, write to env file.
+    // "Healthy" means: Docker healthcheck passes + Tailscale authenticated + hostname available.
+    // TAILSCALE_SERVE_HOST is appended to the env file so setupCommands can reference it.
     const sidecarHealthy = new command.remote.Command(
       `${name}-sidecar-healthy`,
       {
         connection: args.connection,
-        create: pulumi.interpolate`for i in $(seq 1 60); do if [ "$(docker inspect --format='{{.State.Health.Status}}' ${sidecarName} 2>/dev/null)" = "healthy" ]; then exit 0; fi; sleep 2; done; echo "ERROR: Tailscale sidecar did not become healthy within 120s" >&2; exit 1`,
+        create: [
+          // Wait for Docker healthcheck
+          `for i in $(seq 1 60); do if [ "$(docker inspect --format='{{.State.Health.Status}}' ${sidecarName} 2>/dev/null)" = "healthy" ]; then break; fi; if [ "$i" = "60" ]; then echo "ERROR: Tailscale sidecar did not become healthy within 120s" >&2; exit 1; fi; sleep 2; done`,
+          // Wait for Tailscale to authenticate
+          `for i in $(seq 1 60); do docker exec ${sidecarName} tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break; if [ "$i" = "60" ]; then echo "ERROR: Tailscale did not reach Running state in 120s" >&2; exit 1; fi; sleep 2; done`,
+          // Capture hostname and append to env file
+          `TS_HOST=$(docker exec ${sidecarName} tailscale status --json | jq -r '.Self.DNSName' | sed 's/\\.$//')`,
+          `printf '%s\\n' "TAILSCALE_SERVE_HOST=$TS_HOST" >> ${envFile}`,
+          `echo "$TS_HOST"`,
+        ].join(" && "),
         triggers: [sidecarContainer.id],
       },
-      { parent: this, dependsOn: [sidecarContainer] },
+      { parent: this, dependsOn: [sidecarContainer, writeSecretEnv] },
     );
 
-    // Step 7: Create Envoy container (shares sidecar's network namespace).
+    // Step 7: Run setupCommands as init containers (depend on sidecar being healthy).
+    // TAILSCALE_SERVE_HOST is in the env file from Step 6b.
+    const setupResources: command.remote.Command[] = [];
+
+    for (let i = 0; i < setupCmds.length; i++) {
+      const cmd = setupCmds[i];
+      const words = cmd.replace(/^openclaw\s+/, "").split(/\s+/);
+      const slug = words
+        .slice(0, 2)
+        .join("-")
+        .replace(/[^a-zA-Z0-9_-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 20);
+      const encoded = Buffer.from(cmd).toString("base64");
+
+      const setupResource = new command.remote.Command(
+        `${name}-setup-${i}-${slug}`,
+        {
+          connection: args.connection,
+          create: pulumi.interpolate`docker run --rm --network none --user node --entrypoint /bin/sh --env-file ${envFile} -v openclaw-home-${args.profile}:/home/node -v ${dDir}/config:${DEFAULT_OPENCLAW_CONFIG_DIR} -v ${dDir}/workspace:${DEFAULT_OPENCLAW_WORKSPACE_DIR} ${imageName} -c "set -e; echo '${encoded}' | base64 -d | sh -e"`,
+          triggers: i === 0 ? [sidecarHealthy.stdout] : undefined,
+        },
+        {
+          parent: this,
+          dependsOn: [i === 0 ? sidecarHealthy : setupResources[i - 1]],
+          additionalSecretOutputs: ["stdout", "stderr"],
+        },
+      );
+      setupResources.push(setupResource);
+    }
+
+    const lastSetupDep =
+      setupResources.length > 0
+        ? setupResources[setupResources.length - 1]
+        : sidecarHealthy;
+
+    // Step 8: Create Envoy container (shares sidecar's network namespace).
     const envoyVolumes: docker.types.input.ContainerVolume[] = [
       {
         hostPath: pulumi.output(args.envoyConfigPath).apply((p) => p),
@@ -513,11 +494,11 @@ export class Gateway extends pulumi.ComponentResource {
         containerPath: "/home/linuxbrew/.linuxbrew",
       },
       {
-        hostPath: `${dataDir}/config`,
+        hostPath: `${dDir}/config`,
         containerPath: DEFAULT_OPENCLAW_CONFIG_DIR,
       },
       {
-        hostPath: `${dataDir}/workspace`,
+        hostPath: `${dDir}/workspace`,
         containerPath: DEFAULT_OPENCLAW_WORKSPACE_DIR,
       },
       {
@@ -530,11 +511,11 @@ export class Gateway extends pulumi.ComponentResource {
     // Container command overrides Dockerfile CMD
     const containerCommand = ["openclaw", "gateway", "--port", `${args.port}`];
 
-    // Content hash of init script + Dockerfile — forces container replacement
+    // Content hash of init script — forces container replacement when setup changes.
+    // Dockerfile content changes are tracked by GatewayImage via BuildKit.
     const contentHash = crypto
       .createHash("sha256")
       .update(initScript)
-      .update(dockerfile)
       .digest("hex")
       .slice(0, 12);
 
@@ -579,26 +560,7 @@ export class Gateway extends pulumi.ComponentResource {
       },
     );
 
-    // Step 9: Query Tailscale hostname from the sidecar container
-    const tailscaleHostname = new command.remote.Command(
-      `${name}-tailscale-url`,
-      {
-        connection: args.connection,
-        create: [
-          // Wait for Tailscale to authenticate (up to 120s)
-          `TS_READY=false; for i in $(seq 1 60); do docker exec ${sidecarName} tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && TS_READY=true && break; sleep 2; done`,
-          `if [ "$TS_READY" != "true" ]; then echo "ERROR: Tailscale did not reach Running state in 120s" >&2; exit 1; fi`,
-          `docker exec ${sidecarName} tailscale status --json | jq -r '.Self.DNSName' | sed 's/\\.$//'`,
-        ].join(" && "),
-        triggers: [sidecarContainer.id],
-      },
-      {
-        parent: this,
-        dependsOn: [sidecarContainer, container],
-      },
-    );
-
-    this.tailscaleUrl = tailscaleHostname.stdout.apply(
+    this.tailscaleUrl = sidecarHealthy.stdout.apply(
       (hostname) => `https://${hostname.trim()}`,
     );
 

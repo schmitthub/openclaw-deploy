@@ -21,6 +21,7 @@
     "@pulumi/command": "^1.2.0",
     "@pulumi/digitalocean": "^4.60.0",
     "@pulumi/docker": "^4.11.0",
+    "@pulumi/docker-build": "0.0.15",
     "@pulumi/hcloud": "^1.32.1",
     "@pulumi/oci": "^4.1.0",
     "@pulumi/pulumi": "^3.224.0",

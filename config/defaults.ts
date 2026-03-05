@@ -45,6 +45,12 @@ export const TAILSCALE_IMAGE = "tailscale/tailscale:v1.94.2";
 export const TAILSCALE_STATE_DIR = "/var/lib/tailscale";
 export const TAILSCALE_HEALTH_PORT = 9002;
 
+// Host paths (per-profile directories on the remote VPS)
+export const buildDir = (profile: string) =>
+  `/opt/openclaw-deploy/build/${profile}`;
+export const dataDir = (profile: string) =>
+  `/opt/openclaw-deploy/data/${profile}`;
+
 // Oracle Cloud (OCI) defaults
 export const OCI_ARM_SHAPE_PREFIX = "VM.Standard.A1";
 export const OCI_DEFAULT_OCPUS = 2;
