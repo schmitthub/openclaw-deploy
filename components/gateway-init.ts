@@ -110,10 +110,11 @@ export class GatewayInit extends pulumi.ComponentResource {
       const needsHostname = referencedVars.includes("TAILSCALE_SERVE_HOST");
       const needsToken = referencedVars.includes("OPENCLAW_GATEWAY_TOKEN");
 
-      // Build the command string using pulumi.all() to resolve only referenced outputs.
+      // Build the command + environment. Secrets are passed via SSH AcceptEnv
+      // (the `environment` property), not embedded in the command string.
       // Commands that don't reference TAILSCALE_SERVE_HOST won't include it in the
-      // create string, so Pulumi won't re-run them when the hostname changes.
-      const createCmd = buildInitCommand({
+      // environment, so Pulumi won't re-run them when the hostname changes.
+      const { create: createCmd, environment: cmdEnv } = buildInitCommand({
         profile: args.profile,
         imageName: args.imageName,
         encoded,
@@ -130,12 +131,12 @@ export class GatewayInit extends pulumi.ComponentResource {
         {
           connection: args.connection,
           create: createCmd,
-          logging: "none",
+          environment: cmdEnv,
         },
         {
           parent: this,
           dependsOn: [i === 0 ? createDirs : setupResources[i - 1]],
-          additionalSecretOutputs: ["stdout", "stderr"],
+          additionalSecretOutputs: ["stdout", "stderr", "environment"],
         },
       );
       setupResources.push(setupResource);
@@ -156,9 +157,10 @@ export class GatewayInit extends pulumi.ComponentResource {
 }
 
 /**
- * Builds the remote command string for an init container.
- * Uses export/unset pattern — secrets exist only in the SSH session's env
- * and the ephemeral container's env, both disappear after execution.
+ * Builds the remote command and environment for an init container.
+ * Secrets are passed via SSH AcceptEnv (the `environment` property on
+ * command.remote.Command) — they never appear in the command string,
+ * so Pulumi cannot leak them in error logs or preview output.
  */
 function buildInitCommand(opts: {
   profile: string;
@@ -170,23 +172,24 @@ function buildInitCommand(opts: {
   tailscaleHostname: pulumi.Input<string>;
   gatewayToken: pulumi.Input<string>;
   secretEnv?: pulumi.Input<string>;
-}): pulumi.Output<string> {
-  // Use a named object to avoid fragile positional indexing.
-  // Only include hostname/token if the command references them — this keeps
-  // them out of the create string so Pulumi won't re-run unrelated commands
-  // when these values change.
-  return pulumi
+}): {
+  create: pulumi.Output<string>;
+  environment: pulumi.Output<Record<string, string>>;
+} {
+  const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+  // Build the environment map (secret values — passed via SSH AcceptEnv)
+  const environment = pulumi
     .all({
-      imageName: pulumi.output(opts.imageName),
       secretJson: pulumi.output(opts.secretEnv ?? "{}"),
-      hostname: opts.needsHostname
-        ? pulumi.output(opts.tailscaleHostname)
-        : pulumi.output(""),
       token: opts.needsToken
         ? pulumi.output(opts.gatewayToken)
         : pulumi.output(""),
+      hostname: opts.needsHostname
+        ? pulumi.output(opts.tailscaleHostname)
+        : pulumi.output(""),
     })
-    .apply(({ imageName, secretJson, hostname, token }) => {
+    .apply(({ secretJson, token, hostname }) => {
       let secrets: Record<string, string>;
       try {
         secrets = JSON.parse(secretJson) as Record<string, string>;
@@ -198,47 +201,35 @@ function buildInitCommand(opts: {
         );
       }
 
-      const hostnameVal = opts.needsHostname ? hostname : undefined;
-      const tokenVal = opts.needsToken ? token : undefined;
-
-      // Build export statements
-      const exports: string[] = [];
-      const unsets: string[] = [];
-      const dockerEnvFlags: string[] = [];
-
-      // Add hostname if needed
-      if (hostnameVal !== undefined) {
-        const escaped = hostnameVal.replace(/'/g, "'\\''");
-        exports.push(`export TAILSCALE_SERVE_HOST='${escaped}'`);
-        dockerEnvFlags.push("-e TAILSCALE_SERVE_HOST");
-        unsets.push("TAILSCALE_SERVE_HOST");
+      const env: Record<string, string> = {};
+      if (opts.needsToken && token) {
+        env["OPENCLAW_GATEWAY_TOKEN"] = token;
       }
-
-      // Add token if needed
-      if (tokenVal !== undefined) {
-        const escaped = tokenVal.replace(/'/g, "'\\''");
-        exports.push(`export OPENCLAW_GATEWAY_TOKEN='${escaped}'`);
-        dockerEnvFlags.push("-e OPENCLAW_GATEWAY_TOKEN");
-        unsets.push("OPENCLAW_GATEWAY_TOKEN");
+      if (opts.needsHostname && hostname) {
+        env["TAILSCALE_SERVE_HOST"] = hostname;
       }
-
-      // Add secret env vars
       for (const [k, v] of Object.entries(secrets)) {
-        const escaped = v.replace(/'/g, "'\\''");
-        exports.push(`export ${k}='${escaped}'`);
-        dockerEnvFlags.push(`-e ${k}`);
-        unsets.push(k);
+        if (!ENV_KEY_RE.test(k)) {
+          throw new Error(
+            `Invalid env var key "${k}" in gatewaySecretEnv-${opts.profile}. Keys must match /^[A-Za-z_][A-Za-z0-9_]*$/`,
+          );
+        }
+        env[k] = v;
       }
-
-      const exportBlock =
-        exports.length > 0 ? exports.join(" && ") + " && " : "";
-      const unsetBlock =
-        unsets.length > 0
-          ? " && " + unsets.map((k) => `unset ${k}`).join(" && ")
-          : "";
-      const envFlags =
-        dockerEnvFlags.length > 0 ? " " + dockerEnvFlags.join(" ") : "";
-
-      return `${exportBlock}docker run --rm --network none --user node --entrypoint /bin/sh${envFlags} -v openclaw-home-${opts.profile}:/home/node -v ${opts.dDir}/config:${DEFAULT_OPENCLAW_CONFIG_DIR} -v ${opts.dDir}/workspace:${DEFAULT_OPENCLAW_WORKSPACE_DIR} ${imageName} -c "set -e; echo '${opts.encoded}' | base64 -d | sh -e"${unsetBlock}`;
+      return env;
     });
+
+  // Build the create command (no secret values — safe to log)
+  const create = pulumi
+    .all([pulumi.output(opts.imageName), environment] as const)
+    .apply(([imageName, env]) => {
+      const envFlags = Object.keys(env)
+        .map((k) => `-e ${k}`)
+        .join(" ");
+      const envFlagsStr = envFlags ? ` ${envFlags}` : "";
+
+      return `docker run --rm --network none --user node --entrypoint /bin/sh${envFlagsStr} -v openclaw-home-${opts.profile}:/home/node -v ${opts.dDir}/config:${DEFAULT_OPENCLAW_CONFIG_DIR} -v ${opts.dDir}/workspace:${DEFAULT_OPENCLAW_WORKSPACE_DIR} ${imageName} -c "set -e; echo '${opts.encoded}' | base64 -d | sh -e"`;
+    });
+
+  return { create, environment };
 }

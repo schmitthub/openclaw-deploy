@@ -27,6 +27,10 @@ export class HostBootstrap extends pulumi.ComponentResource {
           "systemctl start docker",
           "docker --version",
           "apt-get install -y fail2ban jq",
+          // Allow Pulumi's SSH client to pass env vars to remote commands.
+          // Secrets are passed via the `environment` property on command.remote.Command
+          // instead of embedding them in command strings (which Pulumi logs on error).
+          "grep -q '^AcceptEnv \\*' /etc/ssh/sshd_config || (echo 'AcceptEnv *' >> /etc/ssh/sshd_config && systemctl reload sshd)",
           "systemctl enable fail2ban",
           "systemctl start fail2ban",
         ].join(" && "),

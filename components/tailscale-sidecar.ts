@@ -90,10 +90,12 @@ export class TailscaleSidecar extends pulumi.ComponentResource {
       {
         connection: args.connection,
         create: [
+          `set -euo pipefail`,
           `mkdir -p ${bDir}`,
           `echo '${encodedSidecar}' | base64 -d > ${bDir}/sidecar-entrypoint.sh`,
           `echo '${encodedServeConfig}' | base64 -d > ${bDir}/serve-config.json`,
           `chmod 755 ${bDir}/sidecar-entrypoint.sh`,
+          `[ -s ${bDir}/sidecar-entrypoint.sh ] && [ -s ${bDir}/serve-config.json ]`,
           `true # content-hash=${sidecarContentHash}`,
         ].join(" && "),
         delete: `rm -f ${bDir}/sidecar-entrypoint.sh ${bDir}/serve-config.json`,
@@ -127,10 +129,11 @@ export class TailscaleSidecar extends pulumi.ComponentResource {
       );
     }
 
-    // Content hash for sidecar — forces replacement when sidecar entrypoint changes
+    // Content hash for sidecar — forces replacement when sidecar entrypoint or serve config changes
     const sidecarHash = crypto
       .createHash("sha256")
       .update(sidecarEntrypoint)
+      .update(serveConfig)
       .digest("hex")
       .slice(0, 12);
 
@@ -199,8 +202,9 @@ export class TailscaleSidecar extends pulumi.ComponentResource {
           `for i in $(seq 1 60); do if [ "$(docker inspect --format='{{.State.Health.Status}}' ${sidecarName} 2>/dev/null)" = "healthy" ]; then break; fi; if [ "$i" = "60" ]; then echo "ERROR: Tailscale sidecar did not become healthy within 120s" >&2; exit 1; fi; sleep 2; done`,
           // Wait for Tailscale to authenticate
           `for i in $(seq 1 60); do docker exec ${sidecarName} tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null 2>&1 && break; if [ "$i" = "60" ]; then echo "ERROR: Tailscale did not reach Running state in 120s" >&2; exit 1; fi; sleep 2; done`,
-          // Capture hostname
+          // Capture and validate hostname
           `TS_HOST=$(docker exec ${sidecarName} tailscale status --json | jq -r '.Self.DNSName' | sed 's/\\.$//')`,
+          `if [ -z "$TS_HOST" ] || ! echo "$TS_HOST" | grep -q '\\.'; then echo "ERROR: Failed to capture valid Tailscale hostname (got: '$TS_HOST')" >&2; exit 1; fi`,
           `echo "$TS_HOST"`,
         ].join(" && "),
         triggers: [sidecarContainer.id],

@@ -48,7 +48,7 @@ export class EnvoyProxy extends pulumi.ComponentResource {
     // Build volumes list
     const volumes: docker.types.input.ContainerVolume[] = [
       {
-        hostPath: pulumi.output(args.envoyConfigPath).apply((p) => p),
+        hostPath: args.envoyConfigPath,
         containerPath: "/etc/envoy/envoy.yaml",
         readOnly: true,
       },

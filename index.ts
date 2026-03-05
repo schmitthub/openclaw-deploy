@@ -66,8 +66,7 @@ if (duplicates.length > 0) {
 }
 
 // --- Component Composition ---
-// Server → HostBootstrap → EnvoyEgress → Gateway(s)
-// Each component depends on the previous one via explicit resource dependencies.
+// Server → HostBootstrap → {EnvoyEgress, GatewayImage, TailscaleSidecar} → EnvoyProxy → GatewayInit → Gateway
 
 // 1. Provision VPS
 const server = new Server("server", {

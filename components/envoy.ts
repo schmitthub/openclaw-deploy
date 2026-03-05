@@ -64,7 +64,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       `${name}-write-config`,
       {
         connection: args.connection,
-        create: `mkdir -p ${ENVOY_CONFIG_HOST_DIR} && echo '${encodedConfig}' | base64 -d > ${configPath}`,
+        create: `set -euo pipefail && mkdir -p ${ENVOY_CONFIG_HOST_DIR} && echo '${encodedConfig}' | base64 -d > ${configPath} && [ -s ${configPath} ]`,
         delete: `rm -f ${configPath} && rmdir --ignore-fail-on-non-empty ${ENVOY_CONFIG_HOST_DIR}`,
       },
       { parent: this },

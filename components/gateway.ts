@@ -20,12 +20,8 @@ export interface GatewayArgs {
   initHash: string;
 }
 
-const RESERVED_ENV_KEYS = new Set([
-  "OPENCLAW_GATEWAY_TOKEN",
-  "TS_AUTHKEY",
-  "TS_SOCKET",
-  "OPENCLAW_TCP_MAPPINGS",
-]);
+// Keys that cannot be overridden via gatewaySecretEnv (set by the component itself)
+const RESERVED_ENV_KEYS = new Set(["OPENCLAW_GATEWAY_TOKEN"]);
 
 export class Gateway extends pulumi.ComponentResource {
   public readonly containerId: pulumi.Output<string>;
@@ -86,6 +82,7 @@ export class Gateway extends pulumi.ComponentResource {
         if (conflicts.length > 0) {
           pulumi.log.warn(
             `gatewaySecretEnv-${args.profile} contains reserved key(s) that will be ignored: ${conflicts.join(", ")}`,
+            this,
           );
         }
         return [
