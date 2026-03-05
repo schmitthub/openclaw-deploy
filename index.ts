@@ -7,6 +7,7 @@ import {
   GatewayImage,
   TailscaleSidecar,
   EnvoyProxy,
+  GatewayInit,
   Gateway,
 } from "./components";
 import type { EgressRule, GatewayConfig, VpsProvider } from "./config/types";
@@ -155,22 +156,37 @@ const gatewayInstances = gateways.map((gw) => {
     { dependsOn: [sidecar, envoy] },
   );
 
+  // Init containers (sequential config, needs hostname + image + envoy healthy)
+  const init = new GatewayInit(
+    `gateway-init-${gw.profile}`,
+    {
+      connection: server.connection,
+      profile: gw.profile,
+      imageName: image.imageName,
+      setupCommands: gw.setupCommands,
+      secretEnv,
+      gatewayToken: token,
+      tailscaleHostname: sidecar.tailscaleHostname,
+    },
+    { dependsOn: [image, envoyProxy] },
+  );
+
+  // Gateway container (last — after everything)
   const gateway = new Gateway(
     `gateway-${gw.profile}`,
     {
       dockerHost: bootstrap.dockerHost,
-      connection: server.connection,
       profile: gw.profile,
       port: gw.port,
       imageName: image.imageName,
       sidecarContainerName: sidecar.containerName,
       tailscaleHostname: sidecar.tailscaleHostname,
-      setupCommands: gw.setupCommands,
       env: gw.env,
       secretEnv,
       auth: { mode: "token", token },
+      initHash: init.contentHash,
     },
-    { dependsOn: [envoyProxy, image] },
+    { dependsOn: [envoyProxy, init] },
   );
   return { gateway, token };
 });

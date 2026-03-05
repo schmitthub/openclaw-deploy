@@ -625,18 +625,102 @@ describe("EnvoyProxy component", () => {
   });
 });
 
+describe("GatewayInit component", () => {
+  const baseInitArgs = {
+    connection: { host: "100.64.0.1", user: "root" },
+    profile: "dev",
+    imageName: "openclaw-gateway-dev:latest",
+    gatewayToken: "test-token",
+    tailscaleHostname: "openclaw.tail1234.ts.net",
+  };
+
+  it("creates dir setup command with no setupCommands", async () => {
+    const { GatewayInit } = await import("../components/gateway-init");
+    const init = new GatewayInit("test-init", baseInitArgs);
+
+    const complete = await promiseOf(init.initComplete);
+    expect(complete).toBeDefined();
+    expect(init.contentHash).toBeDefined();
+  });
+
+  it("creates per-command resources for setupCommands", async () => {
+    const { GatewayInit } = await import("../components/gateway-init");
+    const init = new GatewayInit("test-init-cmds", {
+      ...baseInitArgs,
+      profile: "cmdtest",
+      setupCommands: [
+        'onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"',
+        "config set gateway.controlUi.basePath /openclaw",
+      ],
+    });
+
+    const complete = await promiseOf(init.initComplete);
+    expect(complete).toBeDefined();
+  });
+
+  it("constructs with secretEnv without errors", async () => {
+    const { GatewayInit } = await import("../components/gateway-init");
+    const init = new GatewayInit("test-init-secret", {
+      ...baseInitArgs,
+      profile: "secrettest",
+      setupCommands: [
+        'onboard --non-interactive --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY"',
+      ],
+      secretEnv: JSON.stringify({ OPENROUTER_API_KEY: "sk-or-test-123" }),
+    });
+
+    const complete = await promiseOf(init.initComplete);
+    expect(complete).toBeDefined();
+  });
+
+  it("produces different content hashes for different setupCommands", async () => {
+    const { GatewayInit } = await import("../components/gateway-init");
+    const init1 = new GatewayInit("test-init-hash1", {
+      ...baseInitArgs,
+      profile: "hash1",
+      setupCommands: ["config set foo bar"],
+    });
+    const init2 = new GatewayInit("test-init-hash2", {
+      ...baseInitArgs,
+      profile: "hash2",
+      setupCommands: ["config set baz qux"],
+    });
+
+    expect(init1.contentHash).toBeDefined();
+    expect(init2.contentHash).toBeDefined();
+    expect(init1.contentHash).not.toBe(init2.contentHash);
+  });
+
+  it("detects hostname-dependent commands via env var scanning", async () => {
+    const { GatewayInit } = await import("../components/gateway-init");
+    // Command with $TAILSCALE_SERVE_HOST should include hostname in create string
+    // Command without should not — verified by the component constructing without error
+    const init = new GatewayInit("test-init-scan", {
+      ...baseInitArgs,
+      profile: "scantest",
+      setupCommands: [
+        "config set gateway.controlUi.allowedOrigins '[\"https://$TAILSCALE_SERVE_HOST\"]'",
+        "config set tools.profile full",
+      ],
+    });
+
+    const complete = await promiseOf(init.initComplete);
+    expect(complete).toBeDefined();
+  });
+});
+
 describe("Gateway component", () => {
   const baseGatewayArgs = {
     dockerHost: "ssh://root@100.64.0.1",
-    connection: { host: "100.64.0.1", user: "root" },
     imageName: "openclaw-gateway-dev:latest",
     port: 18789,
     sidecarContainerName: "tailscale-dev",
     tailscaleHostname: "openclaw.tail1234.ts.net",
     auth: { mode: "token" as const, token: "test-token" },
+    initHash: "abc123def456",
   };
 
-  it("creates container and config resources", async () => {
+  it("creates container and exposes outputs", async () => {
     const { Gateway } = await import("../components/gateway");
     const gw = new Gateway("test-gw", {
       ...baseGatewayArgs,
@@ -675,29 +759,11 @@ describe("Gateway component", () => {
     expect(containerId).toBeDefined();
   });
 
-  it("constructs with setupCommands without errors", async () => {
-    const { Gateway } = await import("../components/gateway");
-    const gw = new Gateway("test-gw-setup", {
-      ...baseGatewayArgs,
-      profile: "setuptest",
-      setupCommands: [
-        'onboard --non-interactive --tailscale serve --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice token --token-provider anthropic --token "$ANTHROPIC_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health',
-        "config set gateway.controlUi.basePath /openclaw",
-      ],
-    });
-
-    const containerId = await promiseOf(gw.containerId);
-    expect(containerId).toBeDefined();
-  });
-
   it("constructs with secretEnv without errors", async () => {
     const { Gateway } = await import("../components/gateway");
     const gw = new Gateway("test-gw-secret", {
       ...baseGatewayArgs,
       profile: "secrettest",
-      setupCommands: [
-        'onboard --non-interactive --auth-choice token --token-provider openrouter --token "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health',
-      ],
       secretEnv: JSON.stringify({ OPENROUTER_API_KEY: "sk-or-test-123" }),
     });
 
@@ -718,26 +784,6 @@ describe("Gateway component", () => {
 
     const containerId = await promiseOf(gw.containerId);
     expect(containerId).toBeDefined();
-  });
-
-  it("produces different content hashes for different setupCommands", async () => {
-    const { Gateway } = await import("../components/gateway");
-    const gw1 = new Gateway("test-gw-hash1", {
-      ...baseGatewayArgs,
-      profile: "hash1",
-      setupCommands: ["config set foo bar"],
-    });
-
-    const gw2 = new Gateway("test-gw-hash2", {
-      ...baseGatewayArgs,
-      profile: "hash2",
-      setupCommands: ["config set baz qux"],
-    });
-
-    const id1 = await promiseOf(gw1.containerId);
-    const id2 = await promiseOf(gw2.containerId);
-    expect(id1).toBeDefined();
-    expect(id2).toBeDefined();
   });
 });
 
