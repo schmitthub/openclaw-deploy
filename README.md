@@ -397,12 +397,11 @@ config:
       setupCommands:
         - >-
           onboard --non-interactive --tailscale serve --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health
-        - config set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback true # Ugly hack due to bugs. its safe because you are behind a private tailnet and the gateway token is secret, but ideally this wouldn't be necessary.
-        - config set gateway.auth.allowTailscale false # Ugly hack due to openclaw bugs
+        - config set gateway.auth.allowTailscale true # Ugly hack due to openclaw bugs
         - config set gateway.controlUi.dangerouslyDisableDeviceAuth true # Ugly hack due to openclaw bugs. its mitigated because you are behind a private tailnet and the gateway token is secret, but ideally this wouldn't be necessary.
         - config set tools.profile full # this is going to give it the kitchen sink of power. you can change from full to other profiles if you want https://docs.openclaw.ai/tools#tool-profiles-base-allowlist
-        - config set gateway.controlUi.basePath /openclaw
         - config set skills.install.nodeManager pnpm
+        - config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
         - config set agents.defaults.memorySearch.provider openai
         - 'config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
         - 'config set agents.defaults.memorySearch.remote.apiKey "{"source":"env","provider":"default","id":"OPENROUTER_API_KEY"}"'
@@ -413,6 +412,7 @@ config:
         - 'config set channels.discord.allowFrom "["$DISCORD_USER_ID"]"'
         - config set channels.discord.dmPolicy allowlist
         - config set channels.discord.groupPolicy allowlist
+        - config set tools.exec.host gateway
         - 'config set channels.discord.guilds "{"$DISCORD_SERVER_ID": {"users": ["$DISCORD_USER_ID"], "requireMention": false}}"'
 ```
 

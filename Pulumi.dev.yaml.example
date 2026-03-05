@@ -44,6 +44,6 @@ config:
         - config set channels.discord.groupPolicy allowlist
         - 'config set channels.discord.guilds "{\"$DISCORD_SERVER_ID\": {\"users\": [\"$DISCORD_USER_ID\"], \"requireMention\": false}}"'
         - config set gateway.trustedProxies '["127.0.0.1/8"]'
-        - config set gateway.controlUi.basePath /openclaw
+        - config set tools.exec.host gateway
   openclaw-deploy:gatewaySecretEnv-dev:
     secure: <encrypted>  # JSON: {"ANTHROPIC_API_KEY":"sk-ant-..."}
