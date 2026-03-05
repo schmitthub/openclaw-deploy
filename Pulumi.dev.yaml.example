@@ -32,7 +32,8 @@ config:
         - config set gateway.auth.allowTailscale true
         - config set skills.install.nodeManager pnpm
         - config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
-        - config set gateway.controlUi.dangerouslyDisableDeviceAuth true- config set agents.defaults.memorySearch.provider openai
+        - config set gateway.controlUi.dangerouslyDisableDeviceAuth true
+        - config set agents.defaults.memorySearch.provider openai
         - 'config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
         - 'config set agents.defaults.memorySearch.remote.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"OPENROUTER_API_KEY\"}"'
         - config set agents.defaults.memorySearch.model "openai/text-embedding-3-small"

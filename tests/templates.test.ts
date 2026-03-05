@@ -11,6 +11,7 @@ import {
   ENVOY_EGRESS_PORT,
   ENVOY_UID,
   SSHD_PORT,
+  FILEBROWSER_PORT,
 } from "../config/defaults";
 
 const defaultOpts: DockerfileOpts = { version: "2026.2" };
@@ -189,9 +190,9 @@ describe("renderDockerfile", () => {
     expect(df).not.toMatch(/install.*ttyd|ttyd.*install|RUN.*ttyd/);
   });
 
-  it("does not install filebrowser (replaced by SSH)", () => {
+  it("installs filebrowser via official install script", () => {
     const df = renderDockerfile(defaultOpts);
-    expect(df).not.toContain("filebrowser/get/master/get.sh");
+    expect(df).toContain("filebrowser/get/master/get.sh");
   });
 
   it("is idempotent — same args produce identical output", () => {
@@ -268,9 +269,24 @@ describe("renderEntrypoint", () => {
     expect(ep).not.toContain("tailscaled.sock");
   });
 
-  it("does NOT start web tools (replaced by SSH)", () => {
+  it("does NOT start ttyd (replaced by SSH)", () => {
     expect(ep).not.toContain("ttyd");
-    expect(ep).not.toContain("filebrowser");
+  });
+
+  it("starts filebrowser on loopback at /browse", () => {
+    expect(ep).toContain("filebrowser");
+    expect(ep).toContain("--address 127.0.0.1");
+    expect(ep).toContain("--port 8080");
+    expect(ep).toContain("--baseurl /browse");
+    expect(ep).toContain("--root /home/node");
+  });
+
+  it("starts filebrowser BEFORE exec gosu node", () => {
+    const fbIdx = ep.indexOf("filebrowser --address");
+    const gosuIdx = ep.indexOf('exec gosu node "$@"');
+    expect(fbIdx).toBeGreaterThan(-1);
+    expect(gosuIdx).toBeGreaterThan(-1);
+    expect(fbIdx).toBeLessThan(gosuIdx);
   });
 
   it("does NOT configure Tailscale serve paths (handled by TS_SERVE_CONFIG)", () => {
@@ -492,6 +508,14 @@ describe("renderServeConfig", () => {
     );
   });
 
+  it("configures web handler proxy to filebrowser at /browse/", () => {
+    const config = JSON.parse(renderServeConfig(18789, 2222));
+    const webKey = "${TS_CERT_DOMAIN}:443";
+    expect(config.Web[webKey].Handlers["/browse/"].Proxy).toBe(
+      `http://127.0.0.1:${FILEBROWSER_PORT}`,
+    );
+  });
+
   it("disables Funnel", () => {
     const config = JSON.parse(renderServeConfig(18789, 2222));
     const funnelKey = "${TS_CERT_DOMAIN}:443";
@@ -503,6 +527,14 @@ describe("renderServeConfig", () => {
     const webKey = "${TS_CERT_DOMAIN}:443";
     expect(config.Web[webKey].Handlers["/"].Proxy).toBe(
       "http://127.0.0.1:9999",
+    );
+  });
+
+  it("uses custom filebrowser port", () => {
+    const config = JSON.parse(renderServeConfig(18789, 2222, 9090));
+    const webKey = "${TS_CERT_DOMAIN}:443";
+    expect(config.Web[webKey].Handlers["/browse/"].Proxy).toBe(
+      "http://127.0.0.1:9090",
     );
   });
 

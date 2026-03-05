@@ -21,8 +21,11 @@ export const DEFAULT_OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
 export const DOCKER_BASE_IMAGE = "node:22-bookworm";
 export const NODE_COMPILE_CACHE_DIR = "/home/node/.node-compile-cache";
 
-// SSH access (replaces ttyd/filebrowser web tools)
+// SSH access
 export const SSHD_PORT = 2222;
+
+// Filebrowser (web file manager, served via Tailscale Serve at /browse)
+export const FILEBROWSER_PORT = 8080;
 
 // Core apt packages (always installed)
 export const CORE_APT_PACKAGES = [

@@ -37,6 +37,11 @@ if ! pgrep -x sshd >/dev/null 2>&1; then
   exit 1
 fi
 
+# Start filebrowser on loopback (accessible only via Tailscale Serve at /browse).
+if command -v filebrowser >/dev/null 2>&1; then
+  gosu node filebrowser --address 127.0.0.1 --port 8080 --noauth --root /home/node --baseurl /browse &
+fi
+
 # Drop privileges and exec the CMD as the node user.
 exec gosu node "$@"
 `;

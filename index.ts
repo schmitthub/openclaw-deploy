@@ -219,6 +219,7 @@ export const gatewayServices = pulumi.secret(
         .apply(([url, token]) => ({
           profile: gateways[i].profile,
           controlUi: `${url}#token=${token}`,
+          browse: `${url}/browse/`,
           ssh: `ssh root@${url.replace("https://", "")}`,
         })),
     ),

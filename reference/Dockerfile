@@ -75,6 +75,9 @@ RUN echo 'export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH' >> /home/node/.bashr
     echo 'export HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew' >> /home/node/.bashrc
 USER root
 
+# Install filebrowser (web file manager, served via Tailscale Serve at /browse).
+RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
+
 WORKDIR /app
 RUN chown node:node /app
 

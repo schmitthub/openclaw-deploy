@@ -1,4 +1,4 @@
-import { SSHD_PORT } from "../config/defaults";
+import { SSHD_PORT, FILEBROWSER_PORT } from "../config/defaults";
 
 /**
  * Renders Tailscale Serve JSON config (serve-config.json).
@@ -9,6 +9,7 @@ import { SSHD_PORT } from "../config/defaults";
 export function renderServeConfig(
   gatewayPort: number,
   sshdPort: number = SSHD_PORT,
+  filebrowserPort: number = FILEBROWSER_PORT,
 ): string {
   const config = {
     TCP: {
@@ -19,6 +20,7 @@ export function renderServeConfig(
       "${TS_CERT_DOMAIN}:443": {
         Handlers: {
           "/": { Proxy: `http://127.0.0.1:${gatewayPort}` },
+          "/browse/": { Proxy: `http://127.0.0.1:${filebrowserPort}` },
         },
       },
     },

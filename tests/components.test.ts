@@ -650,7 +650,7 @@ describe("GatewayInit component", () => {
       profile: "cmdtest",
       setupCommands: [
         'onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"',
-        "config set gateway.controlUi.basePath /openclaw",
+        "config set gateway.controlUi.dangerouslyDisableDeviceAuth true",
       ],
     });
 
