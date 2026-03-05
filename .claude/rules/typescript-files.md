@@ -21,15 +21,20 @@ globs: ["**/*.ts"]
 |---------|---------|
 | `@pulumi/pulumi` | Pulumi SDK (ComponentResource, Config, Output/Input) |
 | `@pulumi/hcloud` | Hetzner Cloud VPS provisioning |
-| `@pulumi/docker` | Docker provider (containers, networks, images via remote host) |
+| `@pulumi/digitalocean` | DigitalOcean VPS provisioning |
+| `@pulumi/oci` | Oracle Cloud Infrastructure provisioning |
+| `@pulumi/docker` | Docker provider (containers, networks, volumes via remote host) |
+| `@pulumi/docker-build` | BuildKit image builds via remote Docker daemon |
 | `@pulumi/command` | Remote SSH command execution |
+| `@pulumi/tls` | TLS private key generation (auto-SSH) |
+| `@pulumi/random` | Random password generation (gateway tokens) |
 | `vitest` | Test runner |
 | `typescript` | TypeScript compiler |
 
 ## Package Layout
 | Directory | Purpose |
 |-----------|---------|
-| `components/` | Pulumi ComponentResource subclasses (Server, HostBootstrap, EnvoyEgress, Gateway) |
+| `components/` | Pulumi ComponentResource subclasses (Server, HostBootstrap, EnvoyEgress, GatewayImage, TailscaleSidecar, EnvoyProxy, GatewayInit, Gateway) |
 | `templates/` | Pure functions rendering Docker artifacts (Dockerfile, entrypoint.sh, envoy.yaml) |
 | `config/` | Type definitions, hardcoded domain rules, default constants |
 | `tests/` | Vitest test files |
@@ -48,7 +53,7 @@ globs: ["**/*.ts"]
 - Import constants from `config/defaults.ts` (never hardcode IPs, ports, image tags)
 - `renderDockerfile(opts: DockerfileOpts): string`
 - `renderEntrypoint(): string` (static — no parameters)
-- `renderEnvoyConfig(userRules): EnvoyConfigResult` (returns `{ yaml, warnings }`)
+- `renderEnvoyConfig(userRules): EnvoyConfigResult` (returns `{ yaml, warnings, inspectedDomains, tcpPortMappings }`)
 - Use TypeScript template literals for multi-line output
 - All templates re-exported from `templates/index.ts`
 

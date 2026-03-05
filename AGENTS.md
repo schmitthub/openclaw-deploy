@@ -27,23 +27,28 @@ Primary goals:
 
 ```
 <repo-root>/                          # Pulumi project name: openclaw-deploy
-├── index.ts                          # Stack composition entry point
-├── package.json                      # Dependencies (Pulumi, Docker, Hcloud, Command)
+├── index.ts                          # Stack composition entry point (5-component pipeline per gateway)
+├── package.json                      # Dependencies (Pulumi, Docker, docker-build, Hcloud, Command)
 ├── tsconfig.json                     # TypeScript config (ES2022, strict)
 ├── vitest.config.ts                  # Test runner config
 ├── Pulumi.yaml                       # Pulumi project metadata
 ├── Pulumi.dev.yaml.example           # Example stack config
 ├── components/
-│   ├── index.ts                      # Re-exports
-│   ├── server.ts                     # VPS provisioning (Hetzner; DO/Oracle Phase 2)
+│   ├── index.ts                      # Re-exports all components
+│   ├── server.ts                     # VPS provisioning (Hetzner, DigitalOcean, Oracle)
+│   ├── oci-infra.ts                  # Oracle Cloud auto-provisioned networking
 │   ├── bootstrap.ts                  # Docker + fail2ban install on bare host
-│   ├── envoy.ts                      # Egress proxy: config rendering + cert generation
-│   └── gateway.ts                    # Bridge network + sidecar + envoy + gateway containers
+│   ├── envoy.ts                      # EnvoyEgress: config rendering + cert generation (shared)
+│   ├── gateway-image.ts              # GatewayImage: BuildKit image build via @pulumi/docker-build
+│   ├── tailscale-sidecar.ts          # TailscaleSidecar: bridge network + sidecar + health + hostname
+│   ├── envoy-proxy.ts                # EnvoyProxy: envoy container + health wait
+│   ├── gateway-init.ts               # GatewayInit: sequential init containers + env var scanning
+│   └── gateway.ts                    # Gateway: container-only (volumes + gateway container)
 ├── config/
 │   ├── index.ts                      # Re-exports
 │   ├── types.ts                      # EgressRule, VpsProvider, GatewayConfig, StackConfig
 │   ├── domains.ts                    # Hardcoded egress rules + mergeEgressPolicy()
-│   └── defaults.ts                   # Constants (ports, images, packages)
+│   └── defaults.ts                   # Constants (ports, images, packages, path helpers)
 ├── templates/
 │   ├── index.ts                      # Re-exports
 │   ├── dockerfile.ts                 # Renders Dockerfile (node:22-bookworm + tools)
@@ -61,24 +66,33 @@ Primary goals:
 
 ## Component Hierarchy
 
-Components compose sequentially — each depends on the previous:
+Shared infrastructure components compose sequentially. Per-gateway, five focused components form a pipeline:
 
 ```
 Server (VPS provisioning)
-  ↓ connection (public IP SSH)
+  ↓ connection, dockerHost
 HostBootstrap (Docker + fail2ban install)
-  ↓ dockerHost (public IP)
-EnvoyEgress (config rendering + cert generation — no Docker resources)
-  ↓ envoyConfigPath, envoyConfigHash, inspectedDomains
-Gateway(s) (1+ per server: bridge network + sidecar + envoy + gateway containers)
+  ↓ dockerHost
+EnvoyEgress (shared config rendering + cert generation — no Docker resources)
+  ↓ envoyConfigPath, configHash, inspectedDomains, tcpPortMappings
+  ↓
+Per gateway (1+ per server):
+  GatewayImage ──→ TailscaleSidecar ──→ EnvoyProxy ──→ GatewayInit ──→ Gateway
+  (build)          (netns + auth)        (egress)       (config)        (container)
 ```
 
-| Component       | Type                           | Provider                             | Purpose                                                                      |
-| --------------- | ------------------------------ | ------------------------------------ | ---------------------------------------------------------------------------- |
-| `Server`        | `openclaw:infra:Server`        | `@pulumi/hcloud`                     | Provision VPS, expose IP + connection                                        |
-| `HostBootstrap` | `openclaw:infra:HostBootstrap` | `@pulumi/command`                    | Install Docker + fail2ban on bare host                                       |
-| `EnvoyEgress`   | `openclaw:infra:EnvoyEgress`   | `@pulumi/command`                    | Render envoy.yaml, upload config, generate CA + MITM certs                   |
-| `Gateway`       | `openclaw:app:Gateway`         | `@pulumi/docker` + `@pulumi/command` | Create bridge network, sidecar, envoy, gateway containers; configure gateway |
+`GatewayImage` and `TailscaleSidecar` can run in parallel (independent). `EnvoyProxy` waits for sidecar + envoy config. `GatewayInit` waits for image + envoy proxy. `Gateway` waits for envoy proxy + init.
+
+| Component          | Type                            | Provider                             | Purpose                                                            |
+| ------------------ | ------------------------------- | ------------------------------------ | ------------------------------------------------------------------ |
+| `Server`           | `openclaw:infra:Server`         | `@pulumi/hcloud` + DO + OCI          | Provision VPS, expose IP + connection                              |
+| `HostBootstrap`    | `openclaw:infra:HostBootstrap`  | `@pulumi/command`                    | Install Docker + fail2ban on bare host                             |
+| `EnvoyEgress`      | `openclaw:infra:EnvoyEgress`    | `@pulumi/command`                    | Render envoy.yaml, upload config, generate CA + MITM certs         |
+| `GatewayImage`     | `openclaw:build:GatewayImage`   | `@pulumi/docker-build`               | BuildKit image build (Dockerfile + entrypoint rendered locally)    |
+| `TailscaleSidecar` | `openclaw:net:TailscaleSidecar` | `@pulumi/docker` + `@pulumi/command` | Bridge network, sidecar container, health wait, hostname capture   |
+| `EnvoyProxy`       | `openclaw:net:EnvoyProxy`       | `@pulumi/docker` + `@pulumi/command` | Envoy container + health wait                                      |
+| `GatewayInit`      | `openclaw:app:GatewayInit`      | `@pulumi/command`                    | Sequential init containers via `docker run --rm`, env var scanning |
+| `Gateway`          | `openclaw:app:Gateway`          | `@pulumi/docker`                     | Gateway container (volumes + env + healthcheck)                    |
 
 ## Network Topology
 
@@ -101,22 +115,24 @@ All containers per gateway share a single network namespace via the Tailscale si
 
 Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 
-| Key                          | Type              | Required | Description                                                |
-| ---------------------------- | ----------------- | -------- | ---------------------------------------------------------- |
-| `provider`                   | `"hetzner"`       | yes      | VPS provider                                               |
-| `serverType`                 | string            | yes      | Server type (e.g. `cx22`, `cax21`)                         |
-| `region`                     | string            | yes      | Datacenter region (e.g. `fsn1`)                            |
-| `sshKeyId`                   | string            | no       | SSH key ID or name at provider (auto-generated if omitted) |
-| `tailscaleAuthKey`           | secret            | yes      | One-time Tailscale auth key                                |
-| `egressPolicy`               | `EgressRule[]`    | yes      | User egress rules (additive to hardcoded)                  |
-| `gateways`                   | `GatewayConfig[]` | yes      | Gateway profile definitions (1+)                           |
-| `gatewayToken-<profile>`     | secret            | no       | Auth token override (auto-generated if omitted)            |
-| `gatewaySecretEnv-<profile>` | secret            | no       | JSON `{"KEY":"value"}` — env vars for init + runtime       |
+| Key                          | Type                                          | Required | Description                                                |
+| ---------------------------- | --------------------------------------------- | -------- | ---------------------------------------------------------- |
+| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                               |
+| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                         |
+| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                            |
+| `sshKeyId`                   | string                                        | no       | SSH key ID or name at provider (auto-generated if omitted) |
+| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                |
+| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                  |
+| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                           |
+| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)            |
+| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` — env vars for init + runtime       |
 
 ## Deployment Model
 
 - Each Pulumi stack deploys **one server** with **N gateway instances**.
+- Each gateway instance is composed of **5 Pulumi components** in a pipeline (see Component Hierarchy).
 - Envoy is the sole egress proxy — all TCP egress routes through it via iptables REDIRECT.
+- **Image builds** use `@pulumi/docker-build` (BuildKit). Templates are rendered locally at plan time, written to a temp dir, and BuildKit transfers the build context to the remote Docker daemon via `DOCKER_HOST=ssh://`. No base64 file uploads for image builds.
 - **Tailscale sidecar model**: Each gateway has a dedicated Tailscale sidecar container (`tailscale-<profile>`) that owns the network namespace. The sidecar runs the official `containerboot` entrypoint (Tailscale's Docker image entrypoint). The gateway and envoy containers share the sidecar's netns via `network_mode: container:tailscale-<profile>`.
 - The sidecar entrypoint sets iptables REDIRECT rules, then `exec`s `containerboot` which handles Tailscale auth, state, and serve config automatically.
 - Tailscale uses kernel networking (`TS_USERSPACE=false`) with TUN device (`/dev/net/tun`). WireGuard UDP is allowed only for root (containerboot) via `iptables -m owner --uid-owner 0`. The node user (openclaw) is blocked from all UDP egress.
@@ -125,7 +141,8 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 - SSH access is provided via Tailscale Serve TCP forwarding (port 22 → sshd on port 2222).
 - HTTPS access is provided via Tailscale Serve web handler (port 443 → gateway on loopback).
 - `TS_SERVE_CONFIG` points to a static JSON file rendered by `renderServeConfig()` — containerboot applies it automatically.
-- Gateway configuration is written to a shared volume _before_ the gateway container starts via an ephemeral CLI container (`docker run --rm --network none --user node`). This avoids crash-loops from missing config. After `configSet`, optional `setupCommands` run OpenClaw subcommands (auto-prefixed with `openclaw`, e.g. `models set`, `onboard`). Secret env vars from `gatewaySecretEnv-<profile>` are injected into both the init container and the main gateway container.
+- **Init containers** (`GatewayInit`) run _before_ the gateway container starts via ephemeral CLI containers (`docker run --rm --network none --user node`). This avoids crash-loops from missing config. Each `setupCommand` is a separate `command.remote.Command` resource. Env var scanning detects hostname-dependent commands — only those include the Tailscale hostname in their Pulumi command string, so hostname changes only re-run affected init steps.
+- **Secrets never persist on disk.** Init containers use `export SECRET='val' && docker run -e SECRET && unset SECRET`. No env files.
 - Gateway auth token is passed via `OPENCLAW_GATEWAY_TOKEN` env var (takes precedence over config file in local mode).
 - Docker provider connects to remote hosts via SSH (`ssh://root@<publicIP>`).
 
@@ -145,9 +162,10 @@ Before considering work complete, agents should:
 - Avoid introducing unnecessary runtime dependencies.
 - Templates are **pure functions** returning strings — no side effects, no I/O.
 - Components follow Pulumi conventions: `ComponentResource` subclass, `registerOutputs()`, parent/dependency tracking.
+- Each service is a **first-class component** with its own lifecycle, state tracking, and outputs. Do not combine services.
 - Config types are in `config/types.ts` — update the interface when adding new fields.
 - Hardcoded egress rules are in `config/domains.ts` — these cannot be removed.
-- All constants (ports, image tags) live in `config/defaults.ts`.
+- All constants (ports, image tags, path helpers) live in `config/defaults.ts`.
 
 ## Threat Model & Egress Security
 
@@ -242,9 +260,7 @@ Domain filtering uses TLS SNI inspection for TLS traffic. UDP egress is not prox
 
 ## Future Steps
 
-- Phase 2: DigitalOcean and Oracle Cloud provider support.
 - Add CI validation via pre-commit hooks.
-- Expand Pulumi unit tests with mocked components.
 
 ## Out of Scope (Unless Explicitly Requested)
 

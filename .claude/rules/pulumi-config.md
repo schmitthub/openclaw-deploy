@@ -22,10 +22,9 @@ config:
   openclaw-deploy:gateways:
     - profile: dev
       version: latest
-      packages: []
       port: 18789
-      tailscale: serve
-      configSet: {}
+      setupCommands:
+        - 'onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"'
   openclaw-deploy:gatewayToken-dev:
     secure: <encrypted>
 ```
@@ -53,13 +52,17 @@ cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 - Per-gateway tokens auto-generated via `random.RandomPassword`, manual override via `cfg.getSecret(\`gatewayToken-\${gw.profile}\`)`
 
 ## Component Argument Patterns
-Components accept typed args interfaces:
-- `ServerArgs`: provider, serverType, region, sshKeyId?, image?
+Components accept typed args interfaces (5 per gateway, plus shared infra):
+- `ServerArgs`: provider, serverType, region?, sshKeyId?, compartmentId?, subnetId?, ocpus?, memoryInGbs?
 - `HostBootstrapArgs`: connection
-- `EnvoyEgressArgs`: dockerHost, connection, egressPolicy
-- `GatewayArgs`: dockerHost, connection, internalNetworkName, profile, version, packages, port, tailscale, auth, configSet, setupCommands?, env?, secretEnv?, tcpPortMappings?, udpPortMappings?, tailscaleAuthKey?
+- `EnvoyEgressArgs`: connection, egressPolicy
+- `GatewayImageArgs`: dockerHost, profile, version, installBrowser?, imageSteps?
+- `TailscaleSidecarArgs`: connection, dockerHost, profile, port, tailscaleAuthKey, tcpPortMappings?
+- `EnvoyProxyArgs`: connection, dockerHost, sidecarContainerName, envoyConfigPath, envoyConfigHash, inspectedDomains, profile
+- `GatewayInitArgs`: connection, profile, imageName, setupCommands?, secretEnv?, gatewayToken, tailscaleHostname
+- `GatewayArgs`: dockerHost, profile, port, imageName, sidecarContainerName, tailscaleHostname, env?, secretEnv?, auth, initHash
 
-Security-critical gateway config keys (`gateway.mode`, `gateway.auth.*`, `gateway.trustedProxies`, `discovery.mdns.mode`) are set by the component and **cannot be overridden** by user `configSet`.
+Security-critical gateway config keys (`gateway.mode`, `gateway.auth.*`, `gateway.trustedProxies`, `discovery.mdns.mode`) are set by `GatewayInit` and **cannot be overridden** by user `setupCommands`.
 
 ## Connection Model
-All components use the **public IP** from `server.connection` for SSH commands. Tailscale runs inside gateway containers (not on the host), so there is no Tailscale IP switching. The `tailscaleAuthKey` is passed to `Gateway` which injects it as the `TAILSCALE_AUTHKEY` env var. Reusable auth keys are recommended for multi-gateway setups.
+All components use the **public IP** from `server.connection` for SSH commands. Tailscale runs inside sidecar containers (not on the host), so there is no Tailscale IP switching. The `tailscaleAuthKey` is passed to `TailscaleSidecar` which injects it as the `TS_AUTHKEY` env var on the sidecar container. Reusable auth keys are recommended for multi-gateway setups.

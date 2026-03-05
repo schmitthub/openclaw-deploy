@@ -13,14 +13,15 @@
 | Task 2: TailscaleSidecar component | `complete` | — |
 | Task 3: EnvoyProxy component | `complete` | — |
 | Task 4: GatewayInit component + secrets fix | `complete` | — |
-| Task 5: Slim Gateway + final composition | `pending` | — |
-| Task 6: Tests + documentation + validation | `pending` | — |
+| Task 5: Slim Gateway + final composition | `complete` | — |
+| Task 6: Tests + documentation + validation | `complete` | — |
 
 ## Key Learnings
 
 - **Task 1:** `docker-build.Provider` accepts `host` param just like `docker.Provider` — use `{ host: args.dockerHost }` for remote builds. `docker-build.Image` supports `dockerfile: { inline: content }` so no Dockerfile needs to be written to disk. Only `entrypoint.sh` (COPYed by Dockerfile) needs the temp dir context. Use stable temp dir path (not `mkdtempSync`) to avoid accumulating stale dirs. `imageName` is `Output<string>` — must use `pulumi.interpolate` when embedding in `command.remote.Command` create strings (plain template literals resolve to `[object Object]`). Pin `@pulumi/docker-build` exactly (pre-1.0 package). Mock `docker-build:index:Image` in tests to populate `tags` output.
 - **Task 4:** Env var scanning via `extractReferencedVars()` — pure function checking if command strings contain `$VAR` or `${VAR}` references. Only hostname/token are selectively included in `create` strings; all `secretEnv` keys are always exported unconditionally. Named `pulumi.all({...})` object pattern avoids fragile positional array indexing. `contentHash` only covers setupCommand text — secret rotation triggers gateway container replacement via Docker provider detecting `computedEnvs` changes separately. Export/unset pattern: `export SECRET='val' && docker run -e SECRET && unset SECRET` — no env files on disk.
 - **Task 3:** Clean extraction — envoy container + health wait moved without modification. Component-level `dependsOn: [sidecar]` in `index.ts` is sufficient for Docker ordering because `TailscaleSidecar` includes a health-wait command that must complete before outputs resolve. No need for explicit `dependsOn` on internal `docker.Container` resources. The `ENVOY_CA_CERT_PATH` volume mount on the gateway container is correctly retained (gateway needs `NODE_EXTRA_CA_CERTS` for MITM CA trust).
+- **Task 5:** Gateway was already slim after Task 4 (213 lines). Main changes: added `--bind loopback` to match reference docker-compose, consolidated two separate `secretEnv` apply calls into one, removed `sysctls` (invalid on containers sharing another's netns via `network_mode: container:` — Docker either ignores or rejects; TCP keepalive tuning would need to be on the sidecar). Moved `RESERVED_ENV_KEYS` to module scope. Final: 165 lines. The index.ts 5-component pipeline was already wired correctly from Task 4.
 - **Task 2:** Healthcheck must use `CMD-SHELL` with `||` fallback (`wget localhost || wget 127.0.0.1`) to match reference — `CMD` array format doesn't support shell `||`. Each component should own its own directory lifecycle (tailscale state dir in TailscaleSidecar, config/workspace dirs in Gateway). Don't pass fields that aren't used — `networkName` was dead code in Gateway since containers use `networkMode: container:` not `networksAdvanced`.
 
 ---

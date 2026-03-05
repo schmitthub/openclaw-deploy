@@ -6,19 +6,21 @@ globs: ["**/Dockerfile*", "**/*.sh", "templates/dockerfile.ts", "templates/entry
 
 ## Generated Artifacts (rendered by templates/)
 
-Templates are pure TypeScript functions that return strings. They are called at Pulumi plan time
-and uploaded to remote hosts via `command.remote.Command` (base64-encoded).
+Templates are pure TypeScript functions that return strings. They are called at Pulumi plan time.
 
-| Template | Output | Purpose |
-|----------|--------|---------|
-| `templates/dockerfile.ts` | `Dockerfile` | `node:22-bookworm` + openssh-server + gosu + libsecret-tools + pnpm + bun + brew + uv + tailscale + openclaw |
-| `templates/entrypoint.ts` | `entrypoint.sh` | Gateway: sshd + gosu node (no iptables) |
-| `templates/sidecar.ts` | `sidecar-entrypoint.sh` | Sidecar: iptables REDIRECT + UDP owner-match + exec containerboot |
-| `templates/serve.ts` | `serve-config.json` | Tailscale Serve config (HTTPS + SSH forwarding) |
-| `templates/envoy.ts` | `envoy.yaml` | Egress-only: transparent TLS proxy (SNI whitelist) |
+- **Dockerfile + entrypoint.sh** are rendered locally and written to a temp dir for `@pulumi/docker-build` (BuildKit). No base64 upload — BuildKit handles context transfer via `DOCKER_HOST=ssh://`.
+- **sidecar-entrypoint.sh + serve-config.json** are uploaded to the remote host via `command.remote.Command` (base64-encoded) by `TailscaleSidecar`.
+- **envoy.yaml** is uploaded to the remote host by `EnvoyEgress`.
 
-Artifacts are written to the remote host at `/opt/openclaw-deploy/build/<profile>/` (Dockerfile, entrypoint.sh, sidecar-entrypoint.sh, serve-config.json)
-and `/opt/openclaw-deploy/envoy/envoy.yaml` (Envoy config).
+| Template | Output | Consumed by |
+|----------|--------|-------------|
+| `templates/dockerfile.ts` | `Dockerfile` | `GatewayImage` (local temp dir → BuildKit) |
+| `templates/entrypoint.ts` | `entrypoint.sh` | `GatewayImage` (local temp dir → BuildKit) |
+| `templates/sidecar.ts` | `sidecar-entrypoint.sh` | `TailscaleSidecar` (base64 upload to remote) |
+| `templates/serve.ts` | `serve-config.json` | `TailscaleSidecar` (base64 upload to remote) |
+| `templates/envoy.ts` | `envoy.yaml` | `EnvoyEgress` (base64 upload to remote) |
+
+Remote paths: `/opt/openclaw-deploy/build/<profile>/` (sidecar files), `/opt/openclaw-deploy/envoy/` (envoy config).
 
 ## Dockerfile Conventions
 - Base: `node:22-bookworm` (matches official OpenClaw Docker pattern)
@@ -98,21 +100,21 @@ Deployed via `TS_SERVE_CONFIG` env var on the sidecar — no dynamic `tailscale 
 - Warnings emitted for CIDR SSH/TCP destinations (not supported) and missing port on SSH/TCP rules
 
 ## Docker Container Conventions
-- Per gateway: 1 bridge network + 3 containers (sidecar + envoy + gateway), all sharing sidecar's netns
-- Bridge network: `openclaw-net-<profile>` (NOT `internal: true` — sidecar needs internet)
-- **Tailscale sidecar** (`tailscale-<profile>`): uses `tailscale/tailscale:v1.94.2` image, `capabilities.adds: [NET_ADMIN]`, `dns: [1.1.1.2, 1.0.0.2]`, runs on bridge network. Owns the shared network namespace. Env: `TS_AUTHKEY`, `TS_STATE_DIR`, `TS_USERSPACE=false`, `TS_SERVE_CONFIG`, `TS_ENABLE_HEALTH_CHECK=true`, `ENVOY_UID=101`, `OPENCLAW_TCP_MAPPINGS`. Devices: `/dev/net/tun`. Healthcheck: `wget -q --spider http://localhost:9002/healthz`.
-- **Envoy container** (`envoy-<profile>`): `network_mode: container:tailscale-<profile>`. No `networksAdvanced`, no `dns` (inherited). Env: `ENVOY_UID=101`. Labels: `openclaw.config-hash` (triggers replacement on config change). Volumes: envoy.yaml, CA cert, MITM certs.
-- **Gateway container** (`openclaw-<profile>`): `network_mode: container:tailscale-<profile>` (shared netns). No `CAP_NET_ADMIN`, no `dns` (inherited), no `networksAdvanced` (mutually exclusive with networkMode).
-- Gateway has `init: true`, `restart: unless-stopped`
+- Per gateway: 1 bridge network + 3 containers (sidecar + envoy + gateway), each managed by its own Pulumi component
+- Bridge network: `openclaw-net-<profile>` (NOT `internal: true` — sidecar needs internet). Owned by `TailscaleSidecar`.
+- **Tailscale sidecar** (`tailscale-<profile>`, `TailscaleSidecar` component): uses `tailscale/tailscale:v1.94.2` image, `capabilities.adds: [NET_ADMIN]`, `dns: [1.1.1.2, 1.0.0.2]`, runs on bridge network. Owns the shared network namespace. Env: `TS_AUTHKEY`, `TS_STATE_DIR`, `TS_USERSPACE=false`, `TS_SERVE_CONFIG`, `TS_ENABLE_HEALTH_CHECK=true`, `ENVOY_UID=101`, `OPENCLAW_TCP_MAPPINGS`. Devices: `/dev/net/tun`. Healthcheck: `wget -q --spider http://localhost:9002/healthz || wget -q --spider http://127.0.0.1:9002/healthz`. Outputs: `containerName`, `tailscaleHostname`, `networkName`.
+- **Envoy container** (`envoy-<profile>`, `EnvoyProxy` component): `network_mode: container:tailscale-<profile>`. No `networksAdvanced`, no `dns` (inherited). Env: `ENVOY_UID=101`. Labels: `openclaw.config-hash` (triggers replacement on config change). Volumes: envoy.yaml, CA cert, MITM certs. Healthcheck: `echo > /dev/tcp/localhost/10000`. Outputs: `envoyReady`.
+- **Gateway container** (`openclaw-gateway-<profile>`, `Gateway` component): `network_mode: container:tailscale-<profile>` (shared netns). No `CAP_NET_ADMIN`, no `dns` (inherited), no `networksAdvanced` (mutually exclusive with networkMode). Labels: `openclaw.init-hash` (triggers replacement on init changes).
+- Gateway has `init: true`, `restart: unless-stopped`, command: `openclaw gateway --bind loopback --port <port>`
 - No `HTTP_PROXY`/`HTTPS_PROXY` env vars — iptables REDIRECT in sidecar handles all routing transparently
 - `OPENCLAW_TCP_MAPPINGS` env var (optional): semicolon-delimited `dst|dstPort|envoyPort` entries for SSH/TCP egress. Set on the **sidecar** container. Processed by sidecar-entrypoint.sh to create per-destination iptables REDIRECT rules.
 - `OPENCLAW_GATEWAY_TOKEN` env var (secret): gateway auth token, always set on gateway container.
 - `TS_AUTHKEY` env var (secret): Tailscale auth key, set on the **sidecar** container. Consumed by containerboot for authentication.
 - Tailscale state volume: `${dataDir}/tailscale → /var/lib/tailscale` (mounted on sidecar, persists auth across restarts)
-- Gateway config is written to the shared volume *before* the gateway container starts via an ephemeral CLI container (`docker run --rm --network none --user node --entrypoint /bin/sh -v ${dataDir}/config:/home/node/.openclaw <image> -c "openclaw config set ..."`). This avoids crash-loops from the gateway requiring config (especially `gateway.mode=local`) before it will start.
-- Init container runs commands in order: (1) required config set (security-critical), (2) user `configSet` entries, (3) user `setupCommands` (OpenClaw subcommands, auto-prefixed with `openclaw `, e.g. `models set`, `onboard`).
-- `gatewaySecretEnv-<profile>` (secret, optional): JSON `{"KEY":"value"}` map. Each entry becomes a `-e KEY='VALUE'` flag on the init container (for `setupCommands` that reference `$KEY`) and an env var on the main gateway container (for runtime use). Set via `pulumi config set --secret gatewaySecretEnv-<profile> '{"OPENROUTER_API_KEY":"sk-or-..."}'`. Init container uses `logging: "none"` and `additionalSecretOutputs` to suppress secrets in logs.
-- Per-gateway Docker image: `openclaw-gateway-<profile>:<version>`
+- **Init containers** (`GatewayInit` component): gateway config is written _before_ the gateway container starts via ephemeral CLI containers (`docker run --rm --network none --user node`). Each `setupCommand` is a separate `command.remote.Command` resource. Env var scanning detects which commands reference `$TAILSCALE_SERVE_HOST` — only those re-run on hostname change.
+- **Secrets never persist on disk.** Init containers use `export SECRET='val' && docker run -e SECRET && unset SECRET`. No env files. `logging: "none"` and `additionalSecretOutputs` suppress secrets in Pulumi logs.
+- `gatewaySecretEnv-<profile>` (secret, optional): JSON `{"KEY":"value"}` map injected into both init containers and the main gateway container. Set via `pulumi config set --secret gatewaySecretEnv-<profile> '{"OPENROUTER_API_KEY":"sk-or-..."}'`.
+- **Image builds** (`GatewayImage` component): `@pulumi/docker-build` (BuildKit) builds `openclaw-gateway-<profile>:<version>`. Templates rendered locally to temp dir, BuildKit transfers context to remote Docker. No base64 Dockerfile uploads.
 
 ## Template Code Conventions
 - Templates live in `templates/` and are **pure functions** returning strings
