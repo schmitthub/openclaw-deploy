@@ -27,12 +27,6 @@ export class HostBootstrap extends pulumi.ComponentResource {
           "systemctl start docker",
           "docker --version",
           "apt-get install -y fail2ban jq",
-          // Allow Pulumi's SSH client to pass env vars to remote commands.
-          // Secrets are passed via the `environment` property on command.remote.Command
-          // instead of embedding them in command strings (which Pulumi logs on error).
-          // Uses sshd_config.d/ to ensure global scope — appending to sshd_config can
-          // land inside a Match block (from cloud-init or included configs).
-          "echo 'AcceptEnv *' > /etc/ssh/sshd_config.d/99-accept-env.conf && systemctl reload sshd",
           "systemctl enable fail2ban",
           "systemctl start fail2ban",
         ].join(" && "),
@@ -40,7 +34,26 @@ export class HostBootstrap extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    this.dockerReady = installDocker.stdout.apply(() => "ready");
+    // Step 1b: Configure SSH AcceptEnv so Pulumi can pass env vars via setenv.
+    // Separate resource so it runs even when installDocker is already in state.
+    // Uses sshd_config.d/ for global scope (avoids Match block scoping issues).
+    // Service name varies: ssh (Ubuntu/Debian) vs sshd (RHEL/Fedora/Hetzner).
+    const ACCEPT_ENV_CMD = [
+      "mkdir -p /etc/ssh/sshd_config.d",
+      "echo 'AcceptEnv *' > /etc/ssh/sshd_config.d/99-accept-env.conf",
+      "(systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || kill -HUP $(cat /var/run/sshd.pid 2>/dev/null) 2>/dev/null || true)",
+    ].join(" && ");
+    const configureAcceptEnv = new command.remote.Command(
+      `${name}-accept-env`,
+      {
+        connection: args.connection,
+        create: ACCEPT_ENV_CMD,
+        triggers: [ACCEPT_ENV_CMD],
+      },
+      { parent: this, dependsOn: [installDocker] },
+    );
+
+    this.dockerReady = configureAcceptEnv.stdout.apply(() => "ready");
 
     const conn = pulumi.output(args.connection);
     const hostIp = conn.apply((c) => c.host);
