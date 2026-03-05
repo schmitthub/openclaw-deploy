@@ -99,6 +99,9 @@ USER root
 # Install Tailscale CLI (useful for ad-hoc troubleshooting from gateway).
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
+# Install filebrowser (web file manager, served via Tailscale Serve at /browse).
+RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
+
 WORKDIR /app
 RUN chown node:node /app
 

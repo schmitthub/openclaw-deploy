@@ -85,7 +85,8 @@ Pulumi TypeScript IaC that provisions remote VPS hosts and deploys [OpenClaw](ht
 │   └──────────────────────────────────────────────────────────────┘   │
 │                                                                      │
 │   Tailscale Serve exposes per gateway:                               │
-│     • HTTPS :443 → http://127.0.0.1:18789 (Control UI)              │
+│     • HTTPS :443 /        → http://127.0.0.1:18789 (Control UI)  │
+│     • HTTPS :443 /browse/   → http://127.0.0.1:8080 (File Browser)  │
 │     • SSH :22 → 127.0.0.1:2222 (sshd in gateway)                    │
 │                                                                      │
 │   Docker daemon (provisioned by HostBootstrap)                       │
@@ -96,7 +97,7 @@ Operator machine:
   $ pulumi destroy --stack dev  # tears down
 ```
 
-One Pulumi stack = one server. Each server runs N gateway instances, each with a dedicated Tailscale sidecar + Envoy egress proxy. All three containers per gateway share a single network namespace owned by the sidecar. Tailscale Serve handles ingress (HTTPS for Control UI, SSH for terminal access). No self-managed TLS certificates or reverse proxies.
+One Pulumi stack = one server. Each server runs N gateway instances, each with a dedicated Tailscale sidecar + Envoy egress proxy. All three containers per gateway share a single network namespace owned by the sidecar. Tailscale Serve handles ingress (HTTPS for Control UI, File Browser at `/browse/`, SSH for terminal access). No self-managed TLS certificates or reverse proxies.
 
 Gateway containers mount the OpenClaw runtime home and Linuxbrew data paths as named Docker volumes so runtime-installed binaries persist across container recreation. This is intentionally experimental and trades container purity for operational flexibility.
 
@@ -269,7 +270,8 @@ Operational notes:
 - Gateway is not a daemon supervisor process; after installing a new binary, restart is required for predictable runtime behavior.
 - From the host, you can SSH into the VPS host and restart with Docker (`docker restart openclaw-<profile>`) (ssh key is stored in Pulumi).
 - For day-to-day remote access, SSH into the gateway via Tailscale: `ssh root@<device_tailnetdomain>.ts.net` (Tailscale Serve forwards port 22 to sshd on port 2222 inside the gateway).
-- Control UI is available at `https://<device_tailnetdomain>.ts.net/?token=<gateway-token>`.
+- Control UI is available at `https://<device_tailnetdomain>.ts.net#token=<gateway-token>`.
+- File Browser is available at `https://<device_tailnetdomain>.ts.net/browse/`.
 
 Runtime install workflow (example):
 
@@ -432,14 +434,16 @@ pulumi stack output gatewayServices --show-secrets # shows tailnet hostname, gat
 
 After deploy, check the output for your tailnet hostname and access details. There is a slight delay when initially connecting because Tailscale needs to generate an SSL certificate for the domain. Be patient — it can take up to 10-20 seconds. (You need to enable HTTPS in Tailscale; see the docs.) On first run, Tailscale will register your gateway and assign it a random tailnet domain. This domain changes every time you rebuild the stack or recreate the sidecar container (stopping/restarting does not change it).
 
-- `https://<device_tailnetid>.ts.net/?token=<gateway-token>` for Control UI
+- `https://<device_tailnetid>.ts.net#token=<gateway-token>` for Control UI
+- `https://<device_tailnetid>.ts.net/browse/` for File Browser
 - `ssh root@<device_tailnetid>.ts.net` for SSH access (Tailscale Serve forwards to sshd inside gateway)
 
 ### 6) Post-deploy operational notes
 
 - If you install new runtime binaries, restart the gateway container from the host: `docker restart openclaw-<profile>`, or `kill 1` as root inside the container via SSH.
 - SSH access is provided via Tailscale Serve TCP forwarding — it forwards port 22 on the Tailscale node to sshd (port 2222, loopback) inside the gateway container.
-- Control UI is exposed via Tailscale Serve HTTPS handler — it proxies to the gateway on loopback.
+- Control UI is exposed via Tailscale Serve HTTPS handler at `/` — it proxies to the gateway on loopback.
+- File Browser is exposed via Tailscale Serve HTTPS handler at `/browse/` — it serves the node user's home directory (`/home/node`) for web-based file management. Filebrowser runs inside the gateway container (not a separate container).
 
 ## Common Operations
 

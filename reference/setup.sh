@@ -182,3 +182,4 @@ docker compose "${COMPOSE_ARGS[@]}" up openclaw-gateway -d --build
 echo ""
 echo "Gateway running — Tailscale Serve URLs:"
 echo "  https://${TAILSCALE_SERVE_HOST}#token=$OPENCLAW_GATEWAY_TOKEN  (Control UI)"
+echo "  https://${TAILSCALE_SERVE_HOST}/browse/  (File Browser)"
