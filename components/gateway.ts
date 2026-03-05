@@ -6,10 +6,6 @@ import {
   DEFAULT_OPENCLAW_CONFIG_DIR,
   DEFAULT_OPENCLAW_WORKSPACE_DIR,
   ENVOY_CA_CERT_PATH,
-  ENVOY_IMAGE,
-  ENVOY_UID,
-  ENVOY_MITM_CERTS_HOST_DIR,
-  ENVOY_MITM_CERTS_CONTAINER_DIR,
   dataDir,
 } from "../config";
 
@@ -36,12 +32,6 @@ export interface GatewayArgs {
   secretEnv?: pulumi.Input<string>;
   /** Auth configuration for this gateway */
   auth: { mode: "token"; token: pulumi.Input<string> };
-  /** Host path to the envoy.yaml config file (from EnvoyEgress) */
-  envoyConfigPath: pulumi.Input<string>;
-  /** SHA256 hash of envoy.yaml (triggers envoy container replacement) */
-  envoyConfigHash: string;
-  /** Domains with MITM TLS inspection enabled (from EnvoyEgress) */
-  inspectedDomains: string[];
 }
 
 export class Gateway extends pulumi.ComponentResource {
@@ -69,7 +59,6 @@ export class Gateway extends pulumi.ComponentResource {
     const imageName = args.imageName;
     const sidecarName = args.sidecarContainerName;
     const containerName = `openclaw-gateway-${args.profile}`;
-    const envoyName = `envoy-${args.profile}`;
 
     // Step 1: Create host directories for bind-mounted persistent data
     const createDirs = new command.remote.Command(
@@ -198,65 +187,7 @@ export class Gateway extends pulumi.ComponentResource {
         ? setupResources[setupResources.length - 1]
         : writeHostnameToEnv;
 
-    // Step 4: Create Envoy container (shares sidecar's network namespace)
-    const envoyVolumes: docker.types.input.ContainerVolume[] = [
-      {
-        hostPath: pulumi.output(args.envoyConfigPath).apply((p) => p),
-        containerPath: "/etc/envoy/envoy.yaml",
-        readOnly: true,
-      },
-      {
-        hostPath: ENVOY_CA_CERT_PATH,
-        containerPath: "/etc/envoy/ca-cert.pem",
-        readOnly: true,
-      },
-    ];
-    if (args.inspectedDomains.length > 0) {
-      envoyVolumes.push({
-        hostPath: ENVOY_MITM_CERTS_HOST_DIR,
-        containerPath: ENVOY_MITM_CERTS_CONTAINER_DIR,
-        readOnly: true,
-      });
-    }
-
-    const envoyContainer = new docker.Container(
-      `${name}-envoy`,
-      {
-        name: envoyName,
-        image: ENVOY_IMAGE,
-        restart: "unless-stopped",
-        networkMode: pulumi.interpolate`container:${sidecarName}`,
-        envs: [`ENVOY_UID=${ENVOY_UID}`],
-        healthcheck: {
-          tests: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/10000"],
-          interval: "5s",
-          timeout: "3s",
-          retries: 5,
-          startPeriod: "5s",
-        },
-        volumes: envoyVolumes,
-        labels: [
-          { label: "openclaw.config-hash", value: args.envoyConfigHash },
-        ],
-      },
-      {
-        parent: this,
-        provider: dockerProvider,
-      },
-    );
-
-    // Wait for Envoy to pass healthcheck
-    const envoyHealthy = new command.remote.Command(
-      `${name}-envoy-healthy`,
-      {
-        connection: args.connection,
-        create: pulumi.interpolate`for i in $(seq 1 30); do if [ "$(docker inspect --format='{{.State.Health.Status}}' ${envoyName} 2>/dev/null)" = "healthy" ]; then exit 0; fi; sleep 2; done; echo "ERROR: Envoy did not become healthy within 60s" >&2; exit 1`,
-        triggers: [envoyContainer.id],
-      },
-      { parent: this, dependsOn: [envoyContainer] },
-    );
-
-    // Step 5: Create the gateway container (shares sidecar's network namespace)
+    // Step 4: Create the gateway container (shares sidecar's network namespace)
 
     // Build env vars list
     const envs: pulumi.Input<string>[] = [
@@ -395,7 +326,7 @@ export class Gateway extends pulumi.ComponentResource {
       {
         parent: this,
         provider: dockerProvider,
-        dependsOn: [envoyHealthy, lastSetupDep],
+        dependsOn: [lastSetupDep],
         additionalSecretOutputs: ["envs"],
       },
     );

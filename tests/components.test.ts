@@ -591,6 +591,40 @@ describe("TailscaleSidecar component", () => {
   });
 });
 
+describe("EnvoyProxy component", () => {
+  it("creates envoy container with correct network mode and exposes envoyReady", async () => {
+    const { EnvoyProxy } = await import("../components/envoy-proxy");
+    const proxy = new EnvoyProxy("test-envoy-proxy", {
+      connection: { host: "100.64.0.1", user: "root" },
+      dockerHost: "ssh://root@100.64.0.1",
+      sidecarContainerName: "tailscale-dev",
+      envoyConfigPath: "/opt/openclaw-deploy/envoy/envoy.yaml",
+      envoyConfigHash: "abc123",
+      inspectedDomains: [],
+      profile: "dev",
+    });
+
+    const ready = await promiseOf(proxy.envoyReady);
+    expect(ready).toBe("mock-stdout");
+  });
+
+  it("constructs with inspectedDomains without errors", async () => {
+    const { EnvoyProxy } = await import("../components/envoy-proxy");
+    const proxy = new EnvoyProxy("test-envoy-proxy-mitm", {
+      connection: { host: "100.64.0.1", user: "root" },
+      dockerHost: "ssh://root@100.64.0.1",
+      sidecarContainerName: "tailscale-dev",
+      envoyConfigPath: "/opt/openclaw-deploy/envoy/envoy.yaml",
+      envoyConfigHash: "def456",
+      inspectedDomains: ["api.example.com"],
+      profile: "mitmtest",
+    });
+
+    const ready = await promiseOf(proxy.envoyReady);
+    expect(ready).toBe("mock-stdout");
+  });
+});
+
 describe("Gateway component", () => {
   const baseGatewayArgs = {
     dockerHost: "ssh://root@100.64.0.1",
@@ -600,9 +634,6 @@ describe("Gateway component", () => {
     sidecarContainerName: "tailscale-dev",
     tailscaleHostname: "openclaw.tail1234.ts.net",
     auth: { mode: "token" as const, token: "test-token" },
-    envoyConfigPath: "/opt/openclaw-deploy/envoy/envoy.yaml",
-    envoyConfigHash: "test-hash",
-    inspectedDomains: [] as string[],
   };
 
   it("creates container and config resources", async () => {

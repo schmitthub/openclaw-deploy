@@ -6,6 +6,7 @@ import {
   EnvoyEgress,
   GatewayImage,
   TailscaleSidecar,
+  EnvoyProxy,
   Gateway,
 } from "./components";
 import type { EgressRule, GatewayConfig, VpsProvider } from "./config/types";
@@ -139,6 +140,21 @@ const gatewayInstances = gateways.map((gw) => {
     { dependsOn: [bootstrap] },
   );
 
+  // Envoy proxy (egress, shares sidecar netns)
+  const envoyProxy = new EnvoyProxy(
+    `gateway-envoy-${gw.profile}`,
+    {
+      connection: server.connection,
+      dockerHost: bootstrap.dockerHost,
+      sidecarContainerName: sidecar.containerName,
+      envoyConfigPath: envoy.envoyConfigPath,
+      envoyConfigHash: envoy.configHash,
+      inspectedDomains: envoy.inspectedDomains,
+      profile: gw.profile,
+    },
+    { dependsOn: [sidecar, envoy] },
+  );
+
   const gateway = new Gateway(
     `gateway-${gw.profile}`,
     {
@@ -153,11 +169,8 @@ const gatewayInstances = gateways.map((gw) => {
       env: gw.env,
       secretEnv,
       auth: { mode: "token", token },
-      envoyConfigPath: envoy.envoyConfigPath,
-      envoyConfigHash: envoy.configHash,
-      inspectedDomains: envoy.inspectedDomains,
     },
-    { dependsOn: [envoy, image, sidecar] },
+    { dependsOn: [envoyProxy, image] },
   );
   return { gateway, token };
 });
