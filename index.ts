@@ -200,6 +200,7 @@ const gatewayInstances = gateways.map((gw) => {
       secretEnv,
       auth: { mode: "token", token },
       initHash: init.contentHash,
+      configHash: envoy.configHash,
     },
     { dependsOn: [envoyProxy, init] },
   );

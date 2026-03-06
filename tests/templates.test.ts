@@ -374,6 +374,11 @@ describe("renderEntrypoint", () => {
     expect(corednsIdx).toBeLessThan(gosuIdx);
   });
 
+  it("monitors CoreDNS and kills PID 1 if it dies", () => {
+    expect(ep).toContain("FATAL: CoreDNS died");
+    expect(ep).toContain("kill 1");
+  });
+
   it("is valid bash — no TypeScript interpolation artifacts", () => {
     expect(ep).not.toContain("undefined");
     expect(ep).not.toContain("[object");

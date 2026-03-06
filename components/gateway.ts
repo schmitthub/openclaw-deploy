@@ -21,6 +21,8 @@ export interface GatewayArgs {
   secretEnv?: pulumi.Input<string>;
   auth: { mode: "token"; token: pulumi.Input<string> };
   initHash: string;
+  /** Hash of rendered configs (envoy.yaml + Corefile) — triggers container replacement on policy change */
+  configHash: string;
 }
 
 // Keys that cannot be overridden via gatewaySecretEnv (set by the component itself)
@@ -150,7 +152,10 @@ export class Gateway extends pulumi.ComponentResource {
             readOnly: true,
           },
         ],
-        labels: [{ label: "openclaw.init-hash", value: args.initHash }],
+        labels: [
+          { label: "openclaw.init-hash", value: args.initHash },
+          { label: "openclaw.config-hash", value: args.configHash },
+        ],
       },
       {
         parent: this,

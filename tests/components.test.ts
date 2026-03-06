@@ -719,6 +719,7 @@ describe("Gateway component", () => {
     corefilePath: "/opt/openclaw-deploy/coredns/Corefile",
     auth: { mode: "token" as const, token: "test-token" },
     initHash: "abc123def456",
+    configHash: "deadbeef1234",
   };
 
   it("creates container and exposes outputs", async () => {

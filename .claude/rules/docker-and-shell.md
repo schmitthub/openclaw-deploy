@@ -71,7 +71,7 @@ Key differences from previous architecture:
 The simplified gateway entrypoint handles only application-level setup:
 1. Fixes config dir permissions + git safe.directory for linuxbrew
 2. Starts sshd (for Tailscale Serve TCP forwarding — SSH access)
-3. Starts CoreDNS allowlist proxy (as root, so upstream queries bypass UDP DROP)
+3. Starts CoreDNS allowlist proxy (as root, so upstream queries bypass UDP DROP) + background crash monitor (kills PID 1 to trigger container restart if CoreDNS dies)
 4. Starts filebrowser on loopback
 5. Drops to `node` user via `exec gosu node "$@"`
 
@@ -107,7 +107,7 @@ Deployed via `TS_SERVE_CONFIG` env var on the sidecar — no dynamic `tailscale 
 - Bridge network: `openclaw-net-<profile>` (NOT `internal: true` — sidecar needs internet). Owned by `TailscaleSidecar`.
 - **Tailscale sidecar** (`tailscale-<profile>`, `TailscaleSidecar` component): uses `tailscale/tailscale:v1.94.2` image, `capabilities.adds: [NET_ADMIN]`, `dns: [1.1.1.2, 1.0.0.2]`, runs on bridge network. Owns the shared network namespace. Env: `TS_AUTHKEY`, `TS_STATE_DIR`, `TS_USERSPACE=false`, `TS_SERVE_CONFIG`, `TS_ENABLE_HEALTH_CHECK=true`, `ENVOY_UID=101`, `OPENCLAW_TCP_MAPPINGS`. Devices: `/dev/net/tun`. Healthcheck: `wget -q --spider http://localhost:9002/healthz || wget -q --spider http://127.0.0.1:9002/healthz`. Outputs: `containerName`, `tailscaleHostname`, `networkName`.
 - **Envoy container** (`envoy-<profile>`, `EnvoyProxy` component): `network_mode: container:tailscale-<profile>`. No `networksAdvanced`, no `dns` (inherited). Env: `ENVOY_UID=101`. Labels: `openclaw.config-hash` (triggers replacement on config change). Volumes: envoy.yaml, CA cert, MITM certs. Healthcheck: `echo > /dev/tcp/localhost/10000`. Outputs: `envoyReady`.
-- **Gateway container** (`openclaw-gateway-<profile>`, `Gateway` component): `network_mode: container:tailscale-<profile>` (shared netns). No `CAP_NET_ADMIN`, no `dns` (inherited), no `networksAdvanced` (mutually exclusive with networkMode). Labels: `openclaw.init-hash` (triggers replacement on init changes).
+- **Gateway container** (`openclaw-gateway-<profile>`, `Gateway` component): `network_mode: container:tailscale-<profile>` (shared netns). No `CAP_NET_ADMIN`, no `dns` (inherited), no `networksAdvanced` (mutually exclusive with networkMode). Labels: `openclaw.init-hash` (triggers replacement on init changes), `openclaw.config-hash` (triggers replacement on egress policy/Corefile changes).
 - Gateway has `init: true`, `restart: unless-stopped`, command: `openclaw gateway --bind loopback --port <port>`
 - No `HTTP_PROXY`/`HTTPS_PROXY` env vars — iptables REDIRECT in sidecar handles all routing transparently
 - `OPENCLAW_TCP_MAPPINGS` env var (optional): semicolon-delimited `dst|dstPort|envoyPort` entries for SSH/TCP egress. Set on the **sidecar** container. Processed by sidecar-entrypoint.sh to create per-destination iptables REDIRECT rules.

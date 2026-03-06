@@ -12,8 +12,9 @@ import {
  * This entrypoint only needs to:
  * 1. Fix permissions
  * 2. Start sshd for Tailscale Serve TCP forwarding
- * 3. Start CoreDNS allowlist proxy
- * 4. Drop to node user via gosu
+ * 3. Start CoreDNS allowlist proxy (mandatory, with crash monitor)
+ * 4. Start filebrowser (optional)
+ * 5. Drop to node user via gosu
  */
 export function renderEntrypoint(): string {
   return `#!/bin/bash
@@ -61,6 +62,12 @@ if ! pgrep -x coredns >/dev/null 2>&1; then
   echo "ERROR: CoreDNS exited immediately after start — DNS allowlist is NOT active" >&2
   exit 1
 fi
+
+# Monitor CoreDNS — if it dies after startup, exit to trigger container restart.
+# CoreDNS runs as a background process (not PID 1), so Docker won't detect its death.
+(while kill -0 $(pgrep -x coredns) 2>/dev/null; do sleep 10; done
+  echo "FATAL: CoreDNS died — exiting to trigger container restart" >&2
+  kill 1) &
 
 # Start filebrowser on loopback (accessible only via Tailscale Serve at /browse).
 if command -v filebrowser >/dev/null 2>&1; then

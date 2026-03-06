@@ -82,12 +82,14 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this, provider: buildProvider },
     );
 
-    // Prune dangling images after build to reclaim disk space from previous layers
+    // Prune dangling images after build to reclaim disk space from previous untagged builds
     new command.remote.Command(
       `${name}-prune`,
       {
         connection: args.connection,
-        create: "docker image prune -f",
+        create:
+          "docker image prune -f 2>&1 || echo 'WARN: docker image prune failed (non-critical)'",
+        triggers: [image.ref],
       },
       { parent: this, dependsOn: [image] },
     );
@@ -110,8 +112,16 @@ function writeIfChanged(filePath: string, content: string, mode: number) {
   try {
     const existing = fs.readFileSync(filePath, "utf-8");
     if (existing === content) return;
-  } catch {
-    // File doesn't exist yet
+  } catch (err: unknown) {
+    if (
+      !(
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      )
+    ) {
+      throw err;
+    }
   }
   fs.writeFileSync(filePath, content, { mode });
 }
