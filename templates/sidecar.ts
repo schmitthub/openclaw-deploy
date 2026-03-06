@@ -1,4 +1,4 @@
-import { ENVOY_EGRESS_PORT, ENVOY_UID } from "../config/defaults";
+import { COREDNS_PORT, ENVOY_EGRESS_PORT, ENVOY_UID } from "../config/defaults";
 
 /**
  * Renders the Tailscale sidecar entrypoint script.
@@ -9,8 +9,9 @@ import { ENVOY_EGRESS_PORT, ENVOY_UID } from "../config/defaults";
  *
  * Security model:
  * - TCP: REDIRECT to envoy on localhost (SNI whitelist)
- * - UDP: only root (uid 0 = tailscaled/containerboot) can send UDP
- * - The node user (openclaw gateway) cannot send UDP (exfiltration blocked)
+ * - DNS: uid 1000 UDP+TCP port 53 REDIRECT to CoreDNS (domain allowlist)
+ * - UDP: only root (uid 0 = tailscaled/containerboot) can send other UDP
+ * - The node user (openclaw gateway) cannot send unfiltered UDP
  * - Envoy (uid ${ENVOY_UID}) is excluded from redirect to prevent loops
  */
 export function renderSidecarEntrypoint(): string {
@@ -77,13 +78,25 @@ if [ -n "\${OPENCLAW_TCP_MAPPINGS:-}" ]; then
   IFS="$OLD_IFS"
 fi
 
+# DNS: redirect node user (uid 1000) DNS queries to CoreDNS allowlist proxy.
+# CoreDNS listens on port ${COREDNS_PORT} in the shared network namespace (started by gateway entrypoint).
+# Only resolves whitelisted domains — all others return NXDOMAIN.
+# Both UDP and TCP DNS are redirected — prevents bypass via dig +tcp or TCP-capable resolvers.
+# These rules MUST come before the catch-all TCP REDIRECT to Envoy.
+iptables -t nat -A OUTPUT -p udp --dport 53 -m owner --uid-owner 1000 -j REDIRECT --to-port ${COREDNS_PORT} \\
+  || { echo "ERROR: failed to add DNS UDP REDIRECT rule" >&2; exit 1; }
+iptables -t nat -A OUTPUT -p tcp --dport 53 -m owner --uid-owner 1000 -j REDIRECT --to-port ${COREDNS_PORT} \\
+  || { echo "ERROR: failed to add DNS TCP REDIRECT rule" >&2; exit 1; }
+
 # Catch-all: redirect all other outbound TCP to envoy's transparent proxy listener.
 iptables -t nat -A OUTPUT -p tcp ! -d 127.0.0.0/8 -j REDIRECT --to-ports ${ENVOY_EGRESS_PORT} \\
   || { echo "ERROR: failed to add catch-all TCP REDIRECT rule" >&2; exit 1; }
 
-# UDP: Docker DNS for everyone, root (containerboot/tailscaled) for WireGuard, drop all others.
+# UDP: Docker DNS (all users), CoreDNS loopback for redirected queries, root for WireGuard, drop all others.
 iptables -A OUTPUT -p udp -d 127.0.0.11 -j ACCEPT \\
   || { echo "ERROR: failed to add Docker DNS UDP ACCEPT rule" >&2; exit 1; }
+iptables -A OUTPUT -p udp -d 127.0.0.0/8 --dport ${COREDNS_PORT} -j ACCEPT \\
+  || { echo "ERROR: failed to add CoreDNS UDP ACCEPT rule" >&2; exit 1; }
 iptables -A OUTPUT -p udp -m owner --uid-owner 0 -j ACCEPT \\
   || { echo "ERROR: failed to add root UDP ACCEPT rule" >&2; exit 1; }
 iptables -A OUTPUT -p udp -j DROP \\

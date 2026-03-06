@@ -5,6 +5,7 @@ import { renderSidecarEntrypoint } from "../templates/sidecar";
 import { renderServeConfig } from "../templates/serve";
 import { renderFirewallBypass } from "../templates/bypass";
 import { renderAgentPrompt } from "../templates/agent-prompt";
+import { renderCorefile } from "../templates/coredns";
 import {
   DOCKER_BASE_IMAGE,
   DEFAULT_OPENCLAW_CONFIG_DIR,
@@ -16,6 +17,8 @@ import {
   FILEBROWSER_PORT,
   BYPASS_SOCKS_PORT,
   DEFAULT_BYPASS_TIMEOUT_SECS,
+  COREDNS_PORT,
+  COREDNS_CONTAINER_PATH,
 } from "../config/defaults";
 
 const defaultOpts: DockerfileOpts = { version: "2026.2" };
@@ -192,9 +195,22 @@ describe("renderDockerfile", () => {
     expect(df).toContain("/usr/local/bin/openclaw");
   });
 
-  it("installs Tailscale CLI via official install script", () => {
+  it("does not install Tailscale CLI (handled by sidecar container)", () => {
     const df = renderDockerfile(defaultOpts);
-    expect(df).toContain("https://tailscale.com/install.sh");
+    expect(df).not.toContain("tailscale.com/install.sh");
+  });
+
+  it("uses multi-stage build with downloads stage", () => {
+    const df = renderDockerfile(defaultOpts);
+    expect(df).toContain("FROM debian:bookworm-slim AS downloads");
+    expect(df).toContain("COPY --from=downloads /usr/local/bin/coredns");
+    expect(df).toContain("COPY --from=downloads /usr/local/bin/bun");
+  });
+
+  it("uses multi-stage build with homebrew stage", () => {
+    const df = renderDockerfile(defaultOpts);
+    expect(df).toContain(`FROM ${DOCKER_BASE_IMAGE} AS homebrew`);
+    expect(df).toContain("COPY --from=homebrew /home/linuxbrew");
   });
 
   it("does not install ttyd (replaced by SSH)", () => {
@@ -332,6 +348,32 @@ describe("renderEntrypoint", () => {
     expect(sshdIdx).toBeLessThan(gosuIdx);
   });
 
+  it("starts CoreDNS allowlist proxy as root before gosu drop", () => {
+    expect(ep).toContain("coredns");
+    expect(ep).toContain(`-dns.port ${COREDNS_PORT}`);
+    expect(ep).toContain(COREDNS_CONTAINER_PATH);
+  });
+
+  it("treats CoreDNS as mandatory — fails if binary or config missing", () => {
+    expect(ep).toContain("if [ ! -x /usr/local/bin/coredns ]");
+    expect(ep).toContain(`if [ ! -f ${COREDNS_CONTAINER_PATH} ]`);
+    expect(ep).toContain("coredns binary not found");
+    expect(ep).toContain("Corefile not found");
+  });
+
+  it("verifies CoreDNS is running after start", () => {
+    expect(ep).toContain("pgrep -x coredns");
+    expect(ep).toContain("DNS allowlist is NOT active");
+  });
+
+  it("starts CoreDNS BEFORE exec gosu node", () => {
+    const corednsIdx = ep.indexOf("coredns -conf");
+    const gosuIdx = ep.indexOf('exec gosu node "$@"');
+    expect(corednsIdx).toBeGreaterThan(-1);
+    expect(gosuIdx).toBeGreaterThan(-1);
+    expect(corednsIdx).toBeLessThan(gosuIdx);
+  });
+
   it("is valid bash — no TypeScript interpolation artifacts", () => {
     expect(ep).not.toContain("undefined");
     expect(ep).not.toContain("[object");
@@ -388,8 +430,44 @@ describe("renderSidecarEntrypoint", () => {
     expect(sep).toContain("! -d 127.0.0.0/8 -j REDIRECT");
   });
 
+  it("redirects node user (uid 1000) DNS to CoreDNS allowlist proxy", () => {
+    expect(sep).toContain(
+      `iptables -t nat -A OUTPUT -p udp --dport 53 -m owner --uid-owner 1000 -j REDIRECT --to-port ${COREDNS_PORT}`,
+    );
+  });
+
+  it("redirects TCP DNS (port 53) from node user to CoreDNS", () => {
+    expect(sep).toContain(
+      `iptables -t nat -A OUTPUT -p tcp --dport 53 -m owner --uid-owner 1000 -j REDIRECT --to-port ${COREDNS_PORT}`,
+    );
+  });
+
+  it("DNS REDIRECT rules come BEFORE TCP catch-all", () => {
+    const dnsRedirect = sep.indexOf("--dport 53 -m owner --uid-owner 1000");
+    const tcpCatchAll = sep.indexOf(
+      `-j REDIRECT --to-ports ${ENVOY_EGRESS_PORT}`,
+    );
+    expect(dnsRedirect).toBeGreaterThan(-1);
+    expect(tcpCatchAll).toBeGreaterThan(-1);
+    expect(dnsRedirect).toBeLessThan(tcpCatchAll);
+  });
+
   it("allows Docker DNS (127.0.0.11) UDP", () => {
     expect(sep).toContain("iptables -A OUTPUT -p udp -d 127.0.0.11 -j ACCEPT");
+  });
+
+  it("scopes CoreDNS UDP ACCEPT to loopback only", () => {
+    expect(sep).toContain(
+      `iptables -A OUTPUT -p udp -d 127.0.0.0/8 --dport ${COREDNS_PORT} -j ACCEPT`,
+    );
+  });
+
+  it("CoreDNS UDP ACCEPT comes before UDP DROP", () => {
+    const corednsAccept = sep.indexOf(`--dport ${COREDNS_PORT} -j ACCEPT`);
+    const udpDrop = sep.indexOf("-p udp -j DROP");
+    expect(corednsAccept).toBeGreaterThan(-1);
+    expect(udpDrop).toBeGreaterThan(-1);
+    expect(corednsAccept).toBeLessThan(udpDrop);
   });
 
   describe("UDP owner-match rules", () => {
@@ -665,5 +743,77 @@ describe("renderAgentPrompt", () => {
 
   it("is idempotent — same output each time", () => {
     expect(renderAgentPrompt()).toBe(renderAgentPrompt());
+  });
+});
+
+describe("renderCorefile", () => {
+  it("includes hardcoded infrastructure domains", () => {
+    const cf = renderCorefile();
+    expect(cf).toContain("github.com");
+    expect(cf).toContain("registry.npmjs.org");
+    expect(cf).toContain("api.anthropic.com");
+  });
+
+  it("includes user-defined egress domains", () => {
+    const cf = renderCorefile([
+      { dst: "custom-api.example.com", proto: "tls", action: "allow" },
+    ]);
+    expect(cf).toContain("custom-api.example.com");
+  });
+
+  it("strips wildcard prefix from domains", () => {
+    const cf = renderCorefile();
+    // *.tailscale.com should become a tailscale.com server block
+    expect(cf).toContain("tailscale.com");
+    expect(cf).not.toContain("*.tailscale.com");
+  });
+
+  it("has catch-all NXDOMAIN block", () => {
+    const cf = renderCorefile();
+    expect(cf).toContain("rcode NXDOMAIN");
+  });
+
+  it("forwards to Cloudflare malware-blocking DNS", () => {
+    const cf = renderCorefile();
+    expect(cf).toContain("1.1.1.2");
+    expect(cf).toContain("1.0.0.2");
+  });
+
+  it("deduplicates domains from user rules and hardcoded", () => {
+    const cf = renderCorefile([
+      { dst: "github.com", proto: "tls", action: "allow" },
+    ]);
+    const matches = cf.match(/^github\.com \{/gm);
+    expect(matches).toHaveLength(1);
+  });
+
+  it("skips IP and CIDR destinations", () => {
+    const cf = renderCorefile([
+      { dst: "192.168.1.0/24", proto: "tls", action: "allow" },
+      { dst: "10.0.0.1", proto: "tls", action: "allow" },
+    ]);
+    expect(cf).not.toContain("192.168.1.0");
+    expect(cf).not.toContain("10.0.0.1");
+  });
+
+  it("excludes deny rules from DNS allowlist", () => {
+    const cf = renderCorefile([
+      { dst: "blocked.example.com", proto: "tls", action: "deny" },
+    ]);
+    expect(cf).not.toContain("blocked.example.com");
+  });
+
+  it("includes SSH egress rule domains in DNS allowlist", () => {
+    const cf = renderCorefile([
+      { dst: "git.example.com", proto: "ssh", port: 22, action: "allow" },
+    ]);
+    expect(cf).toContain("git.example.com");
+  });
+
+  it("is idempotent — same rules produce identical output", () => {
+    const rules = [
+      { dst: "example.com", proto: "tls" as const, action: "allow" as const },
+    ];
+    expect(renderCorefile(rules)).toBe(renderCorefile(rules));
   });
 });

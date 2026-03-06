@@ -219,7 +219,7 @@ pulumi preview --stack openclaw # review planned resource changes
 pulumi up --stack openclaw # apply changes after confirming
 ```
 
-Pulumi will show an interactive progress view. The `Gateway` resources usually take the longest because they build images and run init commands. Initial deployment can take up to ~20 minutes. I'm working on optimizing with dockerfile caching and parallelism but for now just grab a coffee and relax. Or be a boss and tweak to use dockerhub-hosted images instead of building on the fly.
+Pulumi will show an interactive progress view. The `Gateway` resources usually take the longest because they build images and run init commands. I've done some optimizations to speed this up but it still takes a few minutes. Just grab a coffee and be grateful you don't have to do all of this manually.
 
 After deployment, run:
 
@@ -268,10 +268,10 @@ If all goes well, you now have an operational OpenClaw gateway with Tailscale ac
 │   │   │  │ NAT: RETURN for uid 101 (envoy)              │  │     │   │
 │   │   │  │ NAT: RETURN for uid 0 (root/containerboot)   │  │     │   │
 │   │   │  │ NAT: SSH/TCP → REDIRECT :10001+ (per-rule)   │  │     │   │
+│   │   │  │ NAT: DNS 53 (UDP+TCP) uid 1000 → :5300       │  │     │   │
 │   │   │  │ NAT: ALL TCP → REDIRECT :10000 (catch-all)   │  │     │   │
-│   │   │  │ NAT: UDP 53 uid 1000 → REDIRECT :5300       │  │     │   │
 │   │   │  │ UDP: ACCEPT Docker DNS (127.0.0.11)          │  │     │   │
-│   │   │  │ UDP: ACCEPT CoreDNS (:5300)                  │  │     │   │
+│   │   │  │ UDP: ACCEPT CoreDNS (loopback:5300)          │  │     │   │
 │   │   │  │ UDP: ACCEPT root (containerboot)             │  │     │   │
 │   │   │  │ UDP: DROP all others                         │  │     │   │
 │   │   │  │ exec containerboot (Tailscale entrypoint)    │  │     │   │
@@ -330,7 +330,7 @@ Gateway containers mount the OpenClaw runtime home and Linuxbrew data paths as n
 | **4. CoreDNS allowlist proxy**        | iptables redirects uid 1000 DNS to CoreDNS; only whitelisted domains resolve    | DNS exfiltration via encoded subdomain queries        | No (iptables redirect + CoreDNS runs as root)      |
 | **5. Malware-blocking DNS**           | Cloudflare 1.1.1.2 / 1.0.0.2 as CoreDNS upstream + sidecar `dns:` config        | Known malware, phishing, and C2 domains               | No (Docker DNS config, containers cannot override) |
 
-**UDP exfiltration prevention:** The sidecar's iptables rules redirect DNS (UDP port 53) from uid 1000 to CoreDNS, allow Docker DNS (127.0.0.11) for other users, allow root-owned UDP (containerboot/tailscaled for WireGuard), and DROP all other UDP. The `node` user cannot send unfiltered UDP.
+**UDP exfiltration prevention:** The sidecar's iptables rules redirect DNS (UDP and TCP port 53) from uid 1000 to CoreDNS, allow Docker DNS (127.0.0.11) for other users, allow root-owned UDP (containerboot/tailscaled for WireGuard), and DROP all other UDP. The `node` user cannot send unfiltered UDP.
 
 **Why SNI spoofing doesn't work:** If an attacker forges the SNI to `api.anthropic.com` while connecting to `evil.com`'s IP, Envoy resolves `api.anthropic.com` via DNS independently and connects to the **real** IP — not the attacker's server.
 
@@ -506,9 +506,9 @@ The proxy auto-kills after the timeout. PID is tracked in `/run/firewall-bypass.
 
 A CoreDNS allowlist proxy runs inside each gateway container, preventing the `node` user (uid 1000) from resolving non-whitelisted domains. This closes a DNS exfiltration vector where an attacker could encode data in subdomain queries to attacker-controlled domains.
 
-**How it works:** The sidecar's iptables rules redirect all DNS queries (UDP port 53) from uid 1000 to CoreDNS on port 5300. CoreDNS only resolves domains on the same whitelist used by Envoy, forwarding allowed queries to Cloudflare's malware-blocking resolvers (1.1.1.2 / 1.0.0.2). Everything else gets NXDOMAIN. Root (uid 0) and Envoy (uid 101) bypass DNS filtering entirely — their queries go directly to Docker DNS.
+**How it works:** The sidecar's iptables rules redirect all DNS queries (UDP and TCP port 53) from uid 1000 to CoreDNS on port 5300. CoreDNS only resolves domains on the same whitelist used by Envoy, forwarding allowed queries to Cloudflare's malware-blocking resolvers (1.1.1.2 / 1.0.0.2). Everything else gets NXDOMAIN. Root (uid 0) and Envoy (uid 101) bypass DNS filtering entirely — their queries go directly to Docker DNS.
 
-Hardcoded resolvers (`dig @8.8.8.8`) are also caught by the iptables redirect. DNS-over-TCP, DoT, and DoH are blocked by Envoy's SNI filter. The firewall-bypass escape hatch is unaffected (runs as root).
+Hardcoded resolvers (`dig @8.8.8.8`) are also caught by the iptables redirect. DNS-over-TLS (DoT, port 853) and DNS-over-HTTPS (DoH, port 443) are blocked by Envoy's SNI filter since resolver domains are not whitelisted. The firewall-bypass escape hatch is unaffected (runs as root).
 
 ## Agent Environment Prompt
 

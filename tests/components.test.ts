@@ -716,6 +716,7 @@ describe("Gateway component", () => {
     port: 18789,
     sidecarContainerName: "tailscale-dev",
     tailscaleHostname: "openclaw.tail1234.ts.net",
+    corefilePath: "/opt/openclaw-deploy/coredns/Corefile",
     auth: { mode: "token" as const, token: "test-token" },
     initHash: "abc123def456",
   };

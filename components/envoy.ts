@@ -7,8 +7,13 @@ import {
   ENVOY_CA_CERT_PATH,
   ENVOY_CA_KEY_PATH,
   ENVOY_MITM_CERTS_HOST_DIR,
+  COREDNS_CONFIG_HOST_DIR,
 } from "../config";
-import { renderEnvoyConfig, TcpPortMapping } from "../templates";
+import {
+  renderEnvoyConfig,
+  renderCorefile,
+  TcpPortMapping,
+} from "../templates";
 
 export interface EnvoyEgressArgs {
   /** SSH connection args for remote commands (writing config files to host) */
@@ -20,12 +25,14 @@ export interface EnvoyEgressArgs {
 /**
  * EnvoyEgress renders the Envoy config and manages certificates on the remote host.
  *
- * In the reference architecture, Envoy runs as a per-gateway container (created by Gateway),
+ * In the reference architecture, Envoy runs as a per-gateway container (created by EnvoyProxy),
  * not as a shared singleton. This component only handles config rendering and cert generation.
  */
 export class EnvoyEgress extends pulumi.ComponentResource {
   /** Host path to the uploaded envoy.yaml */
   public readonly envoyConfigPath: pulumi.Output<string>;
+  /** Host path to the uploaded Corefile (CoreDNS allowlist config) */
+  public readonly corefilePath: pulumi.Output<string>;
   /** Host path to the CA certificate (for gateway NODE_EXTRA_CA_CERTS) */
   public readonly caCertPath: pulumi.Output<string>;
   /** Domains with MITM TLS inspection enabled (need per-domain certs) */
@@ -34,7 +41,7 @@ export class EnvoyEgress extends pulumi.ComponentResource {
   public readonly tcpPortMappings: TcpPortMapping[];
   /** Warnings from egress policy rendering (e.g. unsupported rule types) */
   public readonly warnings: string[];
-  /** SHA256 hash (12 chars) of rendered envoy.yaml — triggers container replacement on config change */
+  /** SHA256 hash (12 chars) of rendered configs — triggers container replacement on config change */
   public readonly configHash: string;
 
   constructor(
@@ -44,14 +51,15 @@ export class EnvoyEgress extends pulumi.ComponentResource {
   ) {
     super("openclaw:infra:EnvoyEgress", name, {}, opts);
 
-    // Render envoy config from egress policy (pure function, runs at plan time)
+    // Render envoy config + Corefile from egress policy (pure functions, run at plan time)
     const envoyConfig = renderEnvoyConfig(args.egressPolicy);
+    const corefile = renderCorefile(args.egressPolicy);
     this.inspectedDomains = envoyConfig.inspectedDomains;
     this.tcpPortMappings = envoyConfig.tcpPortMappings;
     this.warnings = envoyConfig.warnings;
     this.configHash = crypto
       .createHash("sha256")
-      .update(envoyConfig.yaml)
+      .update(envoyConfig.yaml + corefile)
       .digest("hex")
       .slice(0, 12);
 
@@ -66,6 +74,19 @@ export class EnvoyEgress extends pulumi.ComponentResource {
         connection: args.connection,
         create: `set -euo pipefail && mkdir -p ${ENVOY_CONFIG_HOST_DIR} && echo '${encodedConfig}' | base64 -d > ${configPath} && [ -s ${configPath} ]`,
         delete: `rm -f ${configPath} && rmdir --ignore-fail-on-non-empty ${ENVOY_CONFIG_HOST_DIR}`,
+      },
+      { parent: this },
+    );
+
+    // Step 1b: Write Corefile (CoreDNS allowlist config) to host.
+    const corefilePath = `${COREDNS_CONFIG_HOST_DIR}/Corefile`;
+    const encodedCorefile = Buffer.from(corefile).toString("base64");
+    new command.remote.Command(
+      `${name}-write-corefile`,
+      {
+        connection: args.connection,
+        create: `set -euo pipefail && mkdir -p ${COREDNS_CONFIG_HOST_DIR} && echo '${encodedCorefile}' | base64 -d > ${corefilePath} && [ -s ${corefilePath} ]`,
+        delete: `rm -f ${corefilePath} && rmdir --ignore-fail-on-non-empty ${COREDNS_CONFIG_HOST_DIR}`,
       },
       { parent: this },
     );
@@ -123,10 +144,12 @@ export class EnvoyEgress extends pulumi.ComponentResource {
 
     // Outputs
     this.envoyConfigPath = pulumi.output(configPath);
+    this.corefilePath = pulumi.output(corefilePath);
     this.caCertPath = pulumi.output(ENVOY_CA_CERT_PATH);
 
     this.registerOutputs({
       envoyConfigPath: this.envoyConfigPath,
+      corefilePath: this.corefilePath,
       caCertPath: this.caCertPath,
       configHash: this.configHash,
       inspectedDomains: this.inspectedDomains,

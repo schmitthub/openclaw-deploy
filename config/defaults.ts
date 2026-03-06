@@ -14,6 +14,12 @@ export const ENVOY_MITM_CERTS_HOST_DIR = "/opt/openclaw-deploy/envoy/certs";
 export const ENVOY_MITM_CERTS_CONTAINER_DIR = "/etc/envoy/certs";
 export const ENVOY_MITM_CLUSTER_NAME = "mitm_forward_cluster";
 
+// CoreDNS (DNS allowlist proxy — runs inside gateway container)
+export const COREDNS_PORT = 5300;
+export const COREDNS_VERSION = "1.12.1";
+export const COREDNS_CONFIG_HOST_DIR = "/opt/openclaw-deploy/coredns";
+export const COREDNS_CONTAINER_PATH = "/etc/coredns/Corefile";
+
 // Gateway defaults
 export const DEFAULT_GATEWAY_PORT = 18789;
 export const DEFAULT_OPENCLAW_CONFIG_DIR = "/home/node/.openclaw";

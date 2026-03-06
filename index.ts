@@ -194,6 +194,7 @@ const gatewayInstances = gateways.map((gw) => {
       imageName: image.imageName,
       sidecarContainerName: sidecar.containerName,
       tailscaleHostname: sidecar.tailscaleHostname,
+      corefilePath: envoy.corefilePath,
       env: gw.env,
       secretEnv,
       auth: { mode: "token", token },

@@ -6,6 +6,7 @@ import {
   DEFAULT_GATEWAY_PORT,
   NODE_COMPILE_CACHE_DIR,
   SSHD_PORT,
+  COREDNS_VERSION,
 } from "../config/defaults";
 import type { ImageStep } from "../config/types";
 
@@ -29,6 +30,40 @@ export function renderDockerfile(opts: DockerfileOpts): string {
 # PLEASE DO NOT EDIT IT DIRECTLY.
 #
 
+# ── Stage: download static binaries (parallel, cached independently) ──────────
+FROM debian:bookworm-slim AS downloads
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates unzip && \\
+    rm -rf /var/lib/apt/lists/*
+
+# CoreDNS — DNS allowlist proxy (~15MB static binary)
+ARG TARGETARCH
+RUN curl -fsSL "https://github.com/coredns/coredns/releases/download/v${COREDNS_VERSION}/coredns_${COREDNS_VERSION}_linux_\${TARGETARCH}.tgz" | \\
+    tar -xz -C /usr/local/bin/ && \\
+    chmod 755 /usr/local/bin/coredns
+
+# Bun
+RUN curl -fsSL https://bun.sh/install | bash && \\
+    cp /root/.bun/bin/bun /usr/local/bin/bun
+
+# filebrowser
+RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
+
+# ── Stage: homebrew (heaviest, rarely changes) ────────────────────────────────
+FROM ${DOCKER_BASE_IMAGE} AS homebrew
+
+RUN groupmod -g 1000 node && usermod -u 1000 node
+
+RUN if ! id -u linuxbrew >/dev/null 2>&1; then useradd -m -s /bin/bash linuxbrew; fi; \\
+        usermod -aG linuxbrew node; \\
+        mkdir -p "/home/linuxbrew/.linuxbrew"; \\
+        chown -R linuxbrew:linuxbrew "/home/linuxbrew"; \\
+        su - linuxbrew -c "NONINTERACTIVE=1 CI=1 /bin/bash -c '$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)'"; \\
+        if [ ! -e "/home/linuxbrew/.linuxbrew/Library" ]; then ln -s "/home/linuxbrew/.linuxbrew/Homebrew/Library" "/home/linuxbrew/.linuxbrew/Library"; fi; \\
+        if [ ! -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then echo "brew install failed"; exit 1; fi; \\
+        chmod -R g+rwx "/home/linuxbrew";
+
+# ── Stage: final ──────────────────────────────────────────────────────────────
 FROM ${DOCKER_BASE_IMAGE}
 
 # Pin node user UID/GID to 1000 (matches chown in Pulumi host provisioning).
@@ -54,11 +89,16 @@ RUN mkdir -p /run/sshd && \\
     chown root:root /usr/bin/ssh && \\
     chmod 700 /usr/bin/ssh
 
-# Install Bun (required for build scripts).
-# Binary copied to /usr/local/bin/ so node user can access it at runtime.
-# (Symlinking through /root/ fails — root home is mode 0700.)
-RUN curl -fsSL https://bun.sh/install | bash && \\
-    cp /root/.bun/bin/bun /usr/local/bin/bun
+# Copy static binaries from download stage
+COPY --from=downloads /usr/local/bin/coredns /usr/local/bin/coredns
+COPY --from=downloads /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=downloads /usr/local/bin/filebrowser /usr/local/bin/filebrowser
+
+# Copy Homebrew from dedicated stage
+RUN if ! id -u linuxbrew >/dev/null 2>&1; then useradd -m -s /bin/bash linuxbrew; fi; \\
+    usermod -aG linuxbrew node
+COPY --from=homebrew /home/linuxbrew /home/linuxbrew
+RUN chmod -R g+rwx "/home/linuxbrew"
 
 # Install pnpm globally (used by OpenClaw for skill/plugin installs at runtime).
 # PNPM_HOME sets the global bin directory so pnpm install -g works as node user.
@@ -67,23 +107,11 @@ ENV PATH="\${PNPM_HOME}:/home/node/.local/bin:\${PATH}"
 RUN npm install -g pnpm && \\
     mkdir -p "\${PNPM_HOME}" /home/node/.local/bin && chown -R node:node /home/node/.local
 
-# Install Homebrew (Linuxbrew) via dedicated linuxbrew user at default prefix.
-# Custom prefixes lose bottle (binary) support — everything builds from source.
-# The /home/linuxbrew directory is mounted as a named Docker volume for persistence across container recreations.
-# The node user is added to the linuxbrew group for write access (brew install at runtime).
+# Homebrew env
 ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew
 ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
 ENV HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
 ENV PATH=/home/linuxbrew/.linuxbrew/bin:\${PATH}
-
-RUN if ! id -u linuxbrew >/dev/null 2>&1; then useradd -m -s /bin/bash linuxbrew; fi; \\
-        usermod -aG linuxbrew node; \\
-        mkdir -p "/home/linuxbrew/.linuxbrew"; \\
-        chown -R linuxbrew:linuxbrew "/home/linuxbrew"; \\
-        su - linuxbrew -c "NONINTERACTIVE=1 CI=1 /bin/bash -c '$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)'"; \\
-        if [ ! -e "/home/linuxbrew/.linuxbrew/Library" ]; then ln -s "/home/linuxbrew/.linuxbrew/Homebrew/Library" "/home/linuxbrew/.linuxbrew/Library"; fi; \\
-        if [ ! -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then echo "brew install failed"; exit 1; fi; \\
-        chmod -R g+rwx "/home/linuxbrew";
 
 # Install uv (Python package manager) as node user.
 USER node
@@ -95,12 +123,6 @@ RUN echo 'export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH' >> /home/node/.bashr
     echo 'export HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar' >> /home/node/.bashrc && \\
     echo 'export HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew' >> /home/node/.bashrc
 USER root
-
-# Install Tailscale CLI (useful for ad-hoc troubleshooting from gateway).
-RUN curl -fsSL https://tailscale.com/install.sh | sh
-
-# Install filebrowser (web file manager, served via Tailscale Serve at /browse).
-RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
 
 WORKDIR /app
 RUN chown node:node /app

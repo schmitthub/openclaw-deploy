@@ -17,7 +17,7 @@ Primary goals:
 - This is a Pulumi TypeScript project — not a CLI, not Docker Compose.
 - Infrastructure is managed declaratively via Pulumi components and stack config.
 - The Docker provider connects to remote hosts via `ssh://root@<ip>` (no local Docker).
-- Templates (`templates/`) are pure functions that render Docker artifacts (Dockerfile, entrypoint.sh, envoy.yaml, serve-config.json).
+- Templates (`templates/`) are pure functions that render Docker artifacts (Dockerfile, entrypoint.sh, envoy.yaml, Corefile, serve-config.json).
 - Components (`components/`) are Pulumi `ComponentResource` subclasses that compose infrastructure.
 - Changes should prioritize compatibility, determinism, and minimal image complexity.
 - Prefer small, focused edits rather than broad refactors.
@@ -56,6 +56,7 @@ Primary goals:
 │   ├── sidecar.ts                    # Renders sidecar-entrypoint.sh (iptables REDIRECT + containerboot)
 │   ├── serve.ts                      # Renders serve-config.json (Tailscale Serve config)
 │   ├── envoy.ts                      # Renders envoy.yaml (egress-only TLS proxy)
+│   ├── coredns.ts                    # Renders Corefile (DNS allowlist proxy)
 │   ├── bypass.ts                     # Renders firewall-bypass script (root-only SOCKS proxy)
 │   └── agent-prompt.ts              # Renders ocdeploy/AGENTS.md (agent operational constraints)
 └── tests/
@@ -85,16 +86,16 @@ Per gateway (1+ per server):
 
 `GatewayImage` and `TailscaleSidecar` can run in parallel (independent). `EnvoyProxy` waits for sidecar + envoy config. `GatewayInit` waits for image + envoy proxy. `Gateway` waits for envoy proxy + init.
 
-| Component          | Type                            | Provider                             | Purpose                                                            |
-| ------------------ | ------------------------------- | ------------------------------------ | ------------------------------------------------------------------ |
-| `Server`           | `openclaw:infra:Server`         | `@pulumi/hcloud` + DO + OCI          | Provision VPS, expose IP + connection                              |
-| `HostBootstrap`    | `openclaw:infra:HostBootstrap`  | `@pulumi/command`                    | Install Docker + fail2ban on bare host                             |
-| `EnvoyEgress`      | `openclaw:infra:EnvoyEgress`    | `@pulumi/command`                    | Render envoy.yaml, upload config, generate CA + MITM certs         |
-| `GatewayImage`     | `openclaw:build:GatewayImage`   | `@pulumi/docker-build`               | BuildKit image build (Dockerfile + entrypoint rendered locally)    |
-| `TailscaleSidecar` | `openclaw:net:TailscaleSidecar` | `@pulumi/docker` + `@pulumi/command` | Bridge network, sidecar container, health wait, hostname capture   |
-| `EnvoyProxy`       | `openclaw:net:EnvoyProxy`       | `@pulumi/docker` + `@pulumi/command` | Envoy container + health wait                                      |
-| `GatewayInit`      | `openclaw:app:GatewayInit`      | `@pulumi/command`                    | Sequential init containers via `docker run --rm`, env var scanning |
-| `Gateway`          | `openclaw:app:Gateway`          | `@pulumi/docker`                     | Gateway container (volumes + env + healthcheck)                    |
+| Component          | Type                            | Provider                             | Purpose                                                                |
+| ------------------ | ------------------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
+| `Server`           | `openclaw:infra:Server`         | `@pulumi/hcloud` + DO + OCI          | Provision VPS, expose IP + connection                                  |
+| `HostBootstrap`    | `openclaw:infra:HostBootstrap`  | `@pulumi/command`                    | Install Docker + fail2ban on bare host                                 |
+| `EnvoyEgress`      | `openclaw:infra:EnvoyEgress`    | `@pulumi/command`                    | Render envoy.yaml + Corefile, upload configs, generate CA + MITM certs |
+| `GatewayImage`     | `openclaw:build:GatewayImage`   | `@pulumi/docker-build`               | BuildKit image build (Dockerfile + entrypoint rendered locally)        |
+| `TailscaleSidecar` | `openclaw:net:TailscaleSidecar` | `@pulumi/docker` + `@pulumi/command` | Bridge network, sidecar container, health wait, hostname capture       |
+| `EnvoyProxy`       | `openclaw:net:EnvoyProxy`       | `@pulumi/docker` + `@pulumi/command` | Envoy container + health wait                                          |
+| `GatewayInit`      | `openclaw:app:GatewayInit`      | `@pulumi/command`                    | Sequential init containers via `docker run --rm`, env var scanning     |
+| `Gateway`          | `openclaw:app:Gateway`          | `@pulumi/docker`                     | Gateway container (volumes + env + healthcheck)                        |
 
 ## Network Topology
 
@@ -139,7 +140,7 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 - The sidecar entrypoint sets iptables REDIRECT rules, then `exec`s `containerboot` which handles Tailscale auth, state, and serve config automatically.
 - Tailscale uses kernel networking (`TS_USERSPACE=false`) with TUN device (`/dev/net/tun`). WireGuard UDP is allowed only for root (containerboot) via `iptables -m owner --uid-owner 0`. The node user (openclaw) is blocked from all UDP egress.
 - The sidecar container uses `dns: [1.1.1.2, 1.0.0.2]` (Cloudflare malware-blocking DNS, inherited by all containers via shared netns).
-- The gateway entrypoint (`entrypoint.sh`) starts sshd, fixes permissions, and drops to `node` user via `gosu`. No iptables, no routing, no tailscaled.
+- The gateway entrypoint (`entrypoint.sh`) fixes permissions, starts sshd, starts CoreDNS (DNS allowlist proxy, as root, mandatory — fail if missing or crashes), then drops to `node` user via `gosu`. No iptables, no routing, no tailscaled.
 - SSH access is provided via Tailscale Serve TCP forwarding (port 22 → sshd on port 2222).
 - HTTPS access is provided via Tailscale Serve web handler (port 443 → gateway on loopback).
 - `TS_SERVE_CONFIG` points to a static JSON file rendered by `renderServeConfig()` — containerboot applies it automatically.
@@ -177,16 +178,17 @@ raw sockets, subprocesses — anything available in the container). Application-
 like `HTTP_PROXY` env vars are insufficient because a prompt-injected agent can use **any tool**
 that ignores proxy settings, connect on **any port**, or use **any protocol**.
 
-**Defense-in-depth model (four layers):**
+**Defense-in-depth model (five layers):**
 
 1. **Root-owned iptables REDIRECT rules** — set by the **sidecar entrypoint**
    (`sidecar-entrypoint.sh`) running as root before `exec containerboot`. The NAT table uses
    owner-match to exclude Envoy (uid 101) and root (uid 0) from redirection, then REDIRECTs
    **all other outbound TCP** to Envoy's proxy listener on localhost:10000. No FILTER table is
-   needed — REDIRECT + UDP DROP is sufficient in the shared netns model. **UDP exfiltration is
-   prevented** by `iptables -A OUTPUT -p udp -d 127.0.0.11 -j ACCEPT` (Docker DNS), then
-   `iptables -A OUTPUT -p udp -m owner --uid-owner root -j ACCEPT` (containerboot/tailscaled
-   only), then `iptables -A OUTPUT -p udp -j DROP` (block all other UDP). The gateway container
+   needed — REDIRECT + UDP DROP is sufficient in the shared netns model. **DNS queries** from
+   uid 1000 (node) are NAT REDIRECTed to CoreDNS on port 5300 (both UDP and TCP — see Layer 4).
+   **UDP exfiltration is prevented** by FILTER rules: `ACCEPT -d 127.0.0.11` (Docker DNS),
+   `ACCEPT -d 127.0.0.0/8 --dport 5300` (CoreDNS loopback), `ACCEPT -m owner --uid-owner root`
+   (containerboot/tailscaled only), then `DROP -p udp` (block all other UDP). The gateway container
    shares this network namespace via `network_mode: container:tailscale-<profile>` and has
    **no `CAP_NET_ADMIN`**, so the `node` user cannot modify these rules.
 
@@ -207,7 +209,16 @@ that ignores proxy settings, connect on **any port**, or use **any protocol**.
    change after startup requiring container restart. **UDP is not proxied through Envoy** — the
    sidecar's iptables owner-match rules allow only root (containerboot) to send UDP directly.
 
-4. **Malware-blocking DNS** — the sidecar container uses `dns: [1.1.1.2, 1.0.0.2]` (Cloudflare's
+4. **CoreDNS allowlist proxy** — CoreDNS runs inside the gateway container as root, listening on
+   port 5300. The sidecar's iptables NAT table redirects all DNS queries (UDP and TCP port 53) from uid
+   1000 (node) to CoreDNS via `REDIRECT --to-port 5300`. CoreDNS only resolves whitelisted domains
+   (same list as Envoy's SNI whitelist, rendered from the merged egress policy). All other queries
+   return NXDOMAIN. This prevents DNS exfiltration via encoded subdomain queries to attacker-controlled
+   domains. Root (uid 0) and Envoy (uid 101) bypass DNS filtering entirely. Hardcoded resolvers
+   (e.g. `dig @8.8.8.8`) are also caught by the iptables REDIRECT on `--dport 53`. CoreDNS forwards
+   allowed queries to Cloudflare malware-blocking DNS (1.1.1.2 / 1.0.0.2).
+
+5. **Malware-blocking DNS** — the sidecar container uses `dns: [1.1.1.2, 1.0.0.2]` (Cloudflare's
    malware-blocking resolvers). These resolvers refuse to resolve known malware, phishing, and
    command-and-control domains. All containers inherit this DNS config via shared netns.
 
@@ -221,8 +232,11 @@ outbound TCP regardless of what tool, port, or protocol is used.
 - Sidecar entrypoint must run as root, set iptables (NAT REDIRECT + UDP DROP), then `exec containerboot`.
 - Sidecar entrypoint must exclude Envoy (uid 101) and root (uid 0) from REDIRECT via owner-match.
 - Sidecar NAT table must REDIRECT all non-excluded outbound TCP to Envoy's transparent proxy listener (localhost:10000).
-- **UDP exfiltration prevention**: Sidecar must `ACCEPT -p udp -d 127.0.0.11` (Docker DNS), `ACCEPT -p udp -m owner --uid-owner root` (containerboot only), then `DROP -p udp` (all others). The `node` user cannot send UDP.
-- Gateway entrypoint must start sshd, fix permissions, then `exec gosu node "$@"`.
+- **UDP exfiltration prevention**: Sidecar must `ACCEPT -p udp -d 127.0.0.11` (Docker DNS), `ACCEPT -p udp -d 127.0.0.0/8 --dport 5300` (CoreDNS, loopback only), `ACCEPT -p udp -m owner --uid-owner root` (containerboot only), then `DROP -p udp` (all others). The `node` user cannot send UDP. CoreDNS ACCEPT must be scoped to loopback to prevent UDP exfil on port 5300 to external IPs.
+- **DNS exfiltration prevention**: Sidecar must REDIRECT both UDP and TCP port 53 from uid 1000 to CoreDNS port 5300. TCP DNS REDIRECT must come **before** the catch-all TCP REDIRECT to Envoy. CoreDNS runs as root in the gateway container, resolves only whitelisted domains, returns NXDOMAIN for all others.
+- CoreDNS Corefile must be rendered from the same merged egress policy as envoy.yaml (shared domain list via `renderCorefile()`).
+- CoreDNS Corefile is uploaded to host by `EnvoyEgress` and bind-mounted read-only into the gateway container.
+- Gateway entrypoint must fix permissions, start sshd, start CoreDNS (mandatory — fail if missing or crashes), then `exec gosu node "$@"`.
 - All hardcoded domains (infrastructure + AI providers + Homebrew + Tailscale) are always included in the Envoy domain whitelist.
 - SSH/TCP egress rules must each get a dedicated Envoy listener port (sequential from `ENVOY_TCP_PORT_BASE`).
 - SSH/TCP port mappings must be passed to the sidecar via `OPENCLAW_TCP_MAPPINGS` env var.
@@ -258,7 +272,7 @@ All domains below are hardcoded in `config/domains.ts` and always included. They
 - TLS: `*.api.letsencrypt.org` (ACME for Tailscale Serve TLS certificates)
 
 User-defined `egressPolicy` rules are **additive** to all hardcoded domains. Duplicates are deduplicated by `mergeEgressPolicy()`.
-Domain filtering uses TLS SNI inspection for TLS traffic. UDP egress is not proxied through Envoy — the sidecar's iptables owner-match rules restrict UDP to root (containerboot) only.
+Domain filtering uses TLS SNI inspection (Envoy) for TLS traffic and DNS allowlisting (CoreDNS) for name resolution. Both share the same merged domain list. UDP egress is not proxied through Envoy — the sidecar's iptables owner-match rules restrict UDP to root (containerboot) only.
 
 ## Firewall Bypass (SOCKS Proxy)
 

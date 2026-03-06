@@ -5,4 +5,5 @@ export { renderEnvoyConfig, type EnvoyConfigResult } from "./envoy";
 export { renderServeConfig } from "./serve";
 export { renderFirewallBypass } from "./bypass";
 export { renderAgentPrompt } from "./agent-prompt";
+export { renderCorefile } from "./coredns";
 export type { TcpPortMapping } from "../config/types";
