@@ -173,9 +173,9 @@ const gatewayInstances = gateways.map((gw) => {
             ]
           : []),
         ...(gw.setupCommands ?? []),
-        // Force ENVIRONMENT.md into agent context via bootstrap-extra-files hook
+        // Force agent constraints into context via bootstrap-extra-files hook
         "hooks enable bootstrap-extra-files",
-        "config set hooks.internal.entries.bootstrap-extra-files.paths '[\"ENVIRONMENT.md\"]'",
+        "config set hooks.internal.entries.bootstrap-extra-files.paths '[\"ocdeploy/AGENTS.md\"]'",
       ],
       secretEnv,
       gatewayToken: token,
@@ -202,7 +202,9 @@ const gatewayInstances = gateways.map((gw) => {
     { dependsOn: [envoyProxy, init] },
   );
 
-  // Post-deploy: write ENVIRONMENT.md (root-owned, read-only chmod 444) into workspace
+  // Post-deploy: write agent constraints to workspace/ocdeploy/AGENTS.md
+  // Root-owned, read-only (444). Re-run only when content hash changes (Pulumi trigger).
+  // Loaded into agent context via bootstrap-extra-files hook.
   const agentPromptContent = renderAgentPrompt();
   const agentPromptHash = crypto
     .createHash("sha256")
@@ -217,38 +219,14 @@ const gatewayInstances = gateways.map((gw) => {
       connection: server.connection,
       create: [
         `docker exec ${containerName} sh -c '`,
-        `  FILE="/home/node/.openclaw/workspace/ENVIRONMENT.md"`,
-        `  EXPECTED_HASH="${agentPromptHash}"`,
-        `  chown root:root "$FILE" 2>/dev/null || true`,
-        `  chmod 444 "$FILE" 2>/dev/null || true`,
-        `  if [ -f "$FILE" ]; then`,
-        `    ACTUAL_HASH=$(sha256sum "$FILE" | cut -d" " -f1)`,
-        `    [ "$ACTUAL_HASH" = "$EXPECTED_HASH" ] && exit 0`,
-        `  fi`,
-        `  echo "${agentPromptB64}" | base64 -d > "$FILE"`,
-        `  chown root:root "$FILE"`,
-        `  chmod 444 "$FILE"`,
+        `  set -e`,
+        `  mkdir -p /home/node/.openclaw/workspace/ocdeploy`,
+        `  echo "${agentPromptB64}" | base64 -d > /home/node/.openclaw/workspace/ocdeploy/AGENTS.md`,
+        `  chown root:root /home/node/.openclaw/workspace/ocdeploy/AGENTS.md`,
+        `  chmod 444 /home/node/.openclaw/workspace/ocdeploy/AGENTS.md`,
         `'`,
       ].join("\n"),
       triggers: [agentPromptHash],
-    },
-    { dependsOn: [gateway] },
-  );
-
-  // Post-deploy: inject ENVIRONMENT.md reference in AGENTS.md (as node user, one-time)
-  new command.remote.Command(
-    `gateway-agents-ref-${gw.profile}`,
-    {
-      connection: server.connection,
-      create: [
-        `docker exec --user node ${containerName} sh -c '`,
-        `  FILE="/home/node/.openclaw/workspace/AGENTS.md"`,
-        `  MARKER="Read \\\`ENVIRONMENT.md\\\`"`,
-        `  [ ! -f "$FILE" ] && exit 0`,
-        `  grep -qF "$MARKER" "$FILE" 2>/dev/null && exit 0`,
-        `  sed -i "1i\\<important>Read \\\`ENVIRONMENT.md\\\` — immutable operational constraints (do not attempt to modify)</important>" "$FILE"`,
-        `'`,
-      ].join("\n"),
     },
     { dependsOn: [gateway] },
   );

@@ -57,7 +57,7 @@ Primary goals:
 │   ├── serve.ts                      # Renders serve-config.json (Tailscale Serve config)
 │   ├── envoy.ts                      # Renders envoy.yaml (egress-only TLS proxy)
 │   ├── bypass.ts                     # Renders firewall-bypass script (root-only SOCKS proxy)
-│   └── agent-prompt.ts              # Renders ENVIRONMENT.md (agent operational constraints)
+│   └── agent-prompt.ts              # Renders ocdeploy/AGENTS.md (agent operational constraints)
 └── tests/
     ├── config.test.ts                # Config types and domain merging
     ├── templates.test.ts             # Dockerfile/entrypoint/sidecar/serve rendering
@@ -285,11 +285,11 @@ firewall-bypass list      # Show if proxy is active
 
 ## Agent Environment Prompt
 
-Each gateway gets an `ENVIRONMENT.md` file in the workspace (`/home/node/.openclaw/workspace/ENVIRONMENT.md`) that informs the AI agent about operational constraints (firewall restrictions, restart limitations, config management via Pulumi). The file is:
+Each gateway gets an `ocdeploy/AGENTS.md` file in the workspace (`/home/node/.openclaw/workspace/ocdeploy/AGENTS.md`) that informs the AI agent about operational constraints (firewall restrictions, restart limitations, config management via Pulumi). The file is:
 
 - **Root-owned, read-only** (chmod 444) — the agent cannot modify or delete it
-- **Content-hash verified** every deploy — rewritten if tampered or template changes
-- **Referenced from `AGENTS.md`** via a one-time `<important>` injection after the H1 heading
+- **Loaded into agent context** via the `bootstrap-extra-files` hook (path: `ocdeploy/AGENTS.md`)
+- **Re-deployed** when content changes (Pulumi trigger on content hash)
 
 The prompt is rendered by `renderAgentPrompt()` in `templates/agent-prompt.ts`.
 

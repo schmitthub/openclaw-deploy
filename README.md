@@ -496,7 +496,7 @@ The proxy auto-kills after the timeout. PID is tracked in `/run/firewall-bypass.
 
 ## Agent Environment Prompt
 
-Every deploy automatically writes an `ENVIRONMENT.md` file into the agent's workspace (`/home/node/.openclaw/workspace/ENVIRONMENT.md`) and injects a reference into `AGENTS.md`. This means your agent understands its operational constraints from the first message — no manual onboarding needed.
+Every deploy automatically writes an `ocdeploy/AGENTS.md` file into the agent's workspace (`/home/node/.openclaw/workspace/ocdeploy/AGENTS.md`) and loads it into the agent's context via the `bootstrap-extra-files` hook. This means your agent understands its operational constraints from the first message — no manual onboarding needed.
 
 The prompt teaches the agent three things it can't figure out on its own:
 
@@ -504,7 +504,7 @@ The prompt teaches the agent three things it can't figure out on its own:
 2. **Config changes don't persist without Pulumi.** Instead of editing `openclaw.json` directly (which gets overwritten on next deploy), it gives you the exact `openclaw config set ...` command to add to your IaC.
 3. **The firewall blocks almost everything.** Instead of failing silently or retrying network requests in a loop, it knows to either ask you to add a permanent whitelist entry (for recurring services) or ask you to open the SOCKS tunnel (for one-off downloads). It also knows to have its exact command ready before asking you to open the tunnel since the default window is only 30 seconds.
 
-The file is root-owned and read-only (chmod 444) so the agent can't modify or delete it. A content hash is checked every deploy — if the file is missing, tampered with, or the template changes, it gets rewritten automatically.
+The file is root-owned and read-only (chmod 444) so the agent can't modify or delete it. It is re-deployed when the template content changes (Pulumi trigger on content hash).
 
 ## Experimental Runtime Binary Persistence
 

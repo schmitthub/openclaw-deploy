@@ -188,16 +188,14 @@ echo "==> Setting required files config (agent environment prompt)"
 docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
   hooks enable bootstrap-extra-files
 docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-  config set hooks.internal.entries.bootstrap-extra-files.paths '["ENVIRONMENT.md"]'
-
-
+  config set hooks.internal.entries.bootstrap-extra-files.paths '["ocdeploy/AGENTS.md"]'
 
 echo ""
 echo "==> Starting Stack"
 docker compose "${COMPOSE_ARGS[@]}" up openclaw-gateway -d --build
 
 echo ""
-echo "==> Writing ENVIRONMENT.md (agent constraints prompt)"
+echo "==> Writing agent constraints to workspace/ocdeploy/AGENTS.md"
 ENV_PROMPT_CONTENT='<environment>
 ## Environment Constraints
 I am running in a customized container stack managed by Pulumi IaC controlled by my user and not in openclaw gateway'"'"'s native sandbox mode.
@@ -211,33 +209,14 @@ I am running in a customized container stack managed by Pulumi IaC controlled by
 </environment>'
 
 ENV_PROMPT_B64=$(printf '%s\n' "$ENV_PROMPT_CONTENT" | base64)
-ENV_PROMPT_HASH=$(printf '%s\n' "$ENV_PROMPT_CONTENT" | shasum -a 256 | cut -d' ' -f1)
 
 docker compose "${COMPOSE_ARGS[@]}" exec -T openclaw-gateway sh -c "
-  FILE='/home/node/.openclaw/workspace/ENVIRONMENT.md'
-  EXPECTED_HASH='$ENV_PROMPT_HASH'
-  chown root:root \"\$FILE\" 2>/dev/null || true
-  chmod 444 \"\$FILE\" 2>/dev/null || true
-  if [ -f \"\$FILE\" ]; then
-    ACTUAL_HASH=\$(sha256sum \"\$FILE\" | cut -d' ' -f1)
-    [ \"\$ACTUAL_HASH\" = \"\$EXPECTED_HASH\" ] && exit 0
-  fi
-  echo '$ENV_PROMPT_B64' | base64 -d > \"\$FILE\"
-  chown root:root \"\$FILE\"
-  chmod 444 \"\$FILE\"
+  set -e
+  mkdir -p /home/node/.openclaw/workspace/ocdeploy
+  echo '$ENV_PROMPT_B64' | base64 -d > /home/node/.openclaw/workspace/ocdeploy/AGENTS.md
+  chown root:root /home/node/.openclaw/workspace/ocdeploy/AGENTS.md
+  chmod 444 /home/node/.openclaw/workspace/ocdeploy/AGENTS.md
 "
-
-echo "==> Injecting ENVIRONMENT.md reference in AGENTS.md"
-docker compose "${COMPOSE_ARGS[@]}" exec -T --user node openclaw-gateway sh -c '
-  FILE="/home/node/.openclaw/workspace/AGENTS.md"
-  MARKER="Read \`ENVIRONMENT.md\`"
-  if [ ! -f "$FILE" ]; then
-    echo "NOTE: $FILE does not exist yet — skipping ENVIRONMENT.md reference injection"
-    exit 0
-  fi
-  grep -qF "$MARKER" "$FILE" 2>/dev/null && exit 0
-  sed -i "1i\\<important>Read \`ENVIRONMENT.md\` — immutable operational constraints (do not attempt to modify)</important>" "$FILE"
-'
 
 echo ""
 echo "Gateway running — Tailscale Serve URLs:"

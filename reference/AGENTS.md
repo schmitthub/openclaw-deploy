@@ -33,7 +33,7 @@ Results here inform the `setupCommands` and `configSet` values used in Pulumi st
 | `firewall-bypass`       | Root-only SOCKS proxy — baked into image at `/usr/local/bin/firewall-bypass`   |
 | `sidecar-entrypoint.sh` | iptables REDIRECT, UDP owner-match, exec containerboot (sidecar container)     |
 | `entrypoint.sh`         | Permissions fix, sshd, filebrowser, privilege drop (`gosu node`)               |
-| `setup.sh`              | Runtime app config only — config set, onboard, stack up, ENVIRONMENT.md write  |
+| `setup.sh`              | Runtime app config only — config set, onboard, stack up, agent prompt write    |
 
 Do NOT put filesystem permissions or binary installs in `setup.sh`. Do NOT put app-level config in the Dockerfile or entrypoint. Networking/iptables belongs in `sidecar-entrypoint.sh`, not `entrypoint.sh`.
 
@@ -87,7 +87,7 @@ The `openclaw-cli` service here mirrors the init container pattern in `component
 - Pulumi's init container = `docker run --rm --network none --user node ... openclaw-gateway-<profile>:<version> /tmp/init.sh`
 - This reference stack = `docker compose run --rm openclaw-cli <command>`
 
-After the gateway starts, `setup.sh` writes `ENVIRONMENT.md` (root-owned, chmod 444, content-hash verified) to the workspace and injects a reference into `AGENTS.md`. This mirrors the Pulumi post-deploy `command.remote.Command` resources (`gateway-env-prompt-*` and `gateway-agents-ref-*`) that run after the gateway container starts.
+After the gateway starts, `setup.sh` writes `ocdeploy/AGENTS.md` (root-owned, chmod 444) to the workspace. This mirrors the Pulumi post-deploy `command.remote.Command` resource (`gateway-env-prompt-*`) that runs after the gateway container starts. The file is loaded into the agent's context via the `bootstrap-extra-files` hook.
 
 Once you've verified the right onboard flags and config commands here, translate them to:
 
