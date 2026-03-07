@@ -13,7 +13,7 @@ import {
 } from "../templates";
 import type { ImageStep } from "../config/types";
 
-/** Git commit SHA (short, 7 chars) at plan time. Used as an additional image tag for immutable identification. */
+/** Git commit SHA (short, 7 chars) at plan time. Used as an additional image tag for commit-level identification. */
 let GIT_SHA: string;
 try {
   GIT_SHA = child_process
