@@ -202,6 +202,7 @@ const gatewayInstances = gateways.map((gw) => {
       auth: { mode: "token", token },
       initHash: init.contentHash,
       configHash: envoy.configHash,
+      imageDigest: image.imageDigest,
     },
     { dependsOn: [envoyProxy, init] },
   );

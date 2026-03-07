@@ -23,6 +23,8 @@ export interface GatewayArgs {
   initHash: string;
   /** Hash of rendered configs (envoy.yaml + Corefile) — triggers container replacement on policy change */
   configHash: string;
+  /** Image content digest — triggers container replacement when image content changes */
+  imageDigest: pulumi.Input<string>;
 }
 
 // Keys that cannot be overridden via gatewaySecretEnv (set by the component itself)
@@ -156,6 +158,7 @@ export class Gateway extends pulumi.ComponentResource {
         labels: [
           { label: "openclaw.init-hash", value: args.initHash },
           { label: "openclaw.config-hash", value: args.configHash },
+          { label: "openclaw.image-digest", value: args.imageDigest },
         ],
       },
       {
