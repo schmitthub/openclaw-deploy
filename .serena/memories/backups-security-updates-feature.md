@@ -1,7 +1,7 @@
 # feat/backups-security-updates — Progress & Todos
 
 ## Branch
-`feat/backups-security-updates` off `main`
+`feat/backups-security-updates` off `main` — pushed to `origin`
 
 ## End Goal
 Add optional Hetzner backups + automatic security updates to stack config, and fix image tagging so unchanged images don't cascade updates to all downstream resources.
@@ -11,59 +11,55 @@ Add optional Hetzner backups + automatic security updates to stack config, and f
 ### 1. autoUpdate config (DONE)
 - `HostBootstrapArgs.autoUpdate?: boolean` in `components/bootstrap.ts`
 - Installs `unattended-upgrades` via `command.remote.Command`, gated by `if (args.autoUpdate)`
-- Includes `systemctl is-active` verification step
+- Includes `sleep 1` + `systemctl is-active` verification step
 - Wired into `dockerReady` dependency chain via `pulumi.all()`
 - Read from `cfg.getBoolean("autoUpdate")` in `index.ts`
 
 ### 2. Hetzner backups config (DONE)
 - `HetznerConfig` interface in `config/types.ts` (`{ backups?: boolean }`)
-- `ServerArgs.hetzner?: HetznerConfig` in `components/server.ts` (imports the type, no inline duplication)
+- `ServerArgs.hetzner?: HetznerConfig` in `components/server.ts`
 - `hcloud.Server` gets `backups: args.hetzner?.backups ?? false`
 - `index.ts` reads `cfg.getObject<HetznerConfig>("hetzner")` with runtime validation:
   - Throws if value is not an object (catches `hetzner: true` YAML mistake)
+  - Validates unknown keys (catches typos like `backup` vs `backups`)
   - Warns if `hetzner` config set for non-Hetzner provider
 - `autoUpdate` added to `StackConfig` interface
 
 ### 3. Documentation (DONE)
-- README.md: stack config table + Hetzner options sub-table
-- AGENTS.md: stack config table + HostBootstrap description updated
-- Pulumi.dev.yaml.example: commented-out examples
-- .claude/rules/pulumi-config.md: config access patterns + component arg listings updated
+- README.md, AGENTS.md, Pulumi.dev.yaml.example, .claude/rules/pulumi-config.md all updated
 
-### 4. PR Review (DONE)
-- 4 parallel review agents ran (code, errors, types, comments)
-- All critical/important issues fixed (see commit history)
-- Committed as `5c7dbbe` on branch
+### 4. Image tag cascade fix (DONE)
+- Removed `commitTag` (GIT_SHA-based) from `docker_build.Image.tags` in both `buildAndPush` and `buildOnHost` modes
+- Only stable version tag remains in `tags` (e.g. `ajschmitt/openclaw:main-latest`)
+- Commit SHA tag applied via separate `docker.Tag` resource with `tagTriggers: [image.digest]`
+- `imageName` output now returns the stable version tag — downstream resources don't see changes on every commit
+- `imageDigest` remains source of truth for content-based updates
 
-### 5. Pulumi preview cascade problem (IDENTIFIED, NOT FIXED)
-- `pulumi preview` shows 37 changes when only 2 are real (server backups + new unattended-upgrades command)
-- Root cause: `GatewayImage.buildAndPush()` puts `commitTag` (includes `GIT_SHA`) in the `tags` array of `docker_build.Image`. Every commit changes the tag → Pulumi sees input diff → cascades to RemoteImage, all init commands, gateway container
-- The `image.digest` and `pullTriggers` are already in place but the tag name change triggers updates before digest can gate anything
+### 5. PR Review (DONE)
+- 4 parallel review agents: code, errors, types, comments — all issues fixed
+- Commits: `5c7dbbe`, `38383f9`, `08d4ad7`
 
-## Next Todo — Image Change Tracking (NOT STARTED)
+## Current State — One-Time Migration Cost
 
-### Research needed
-- [ ] **Research best practice for tracking image changes with `@pulumi/docker-build`** — how to avoid cascading updates when image content hasn't changed but commit hash has
-- Key constraint from user: keep the commit SHA tagging, but only perform push/pull/tag operations if the image digest has actually changed
-- Don't remove any existing functionality — just gate operations on digest change
-- The `docker_build.Image` resource is declarative — Pulumi diffs its `tags` input. If `commitTag` is in `tags` and changes, Pulumi always sees a diff regardless of digest
-- Possible approaches to research:
-  - Can `docker_build.Image` be configured to ignore tag changes if content is same?
-  - Should commit tag be applied as a post-build step (separate resource) triggered only by digest?
-  - Is there a Pulumi `ignoreChanges` option that could help?
-  - How do other Pulumi projects handle this pattern?
-- After research, propose approach to user before implementing
+`pulumi preview` shows 37 changes because Pulumi state has old tag patterns. This is a **one-time transition**:
+- `imageName` output changed from commit-tagged (`main-5c7dbbe`) to version-tagged (`main-latest`)
+- Cascades to RemoteImage (replace), all init commands (update), gateway container (replace)
+- **After one `pulumi up`, future previews will be clean.** Only `docker.Tag` updates per commit (leaf node, no cascade).
 
-### After image tracking is resolved
-- [ ] Amend or create new commit with the fix
-- [ ] Re-run `pulumi preview` to verify only real changes show
-- [ ] Create PR
+User confirmed: commit SHA tagging needed for rollback capability.
 
-## Lessons Learned
-- User is very specific about scope — do exactly what's asked, don't restructure or rename things that weren't requested
-- User wants to be consulted before any approach is taken on the image tracking issue
-- The `dockerhubPush` mode uses commit SHA tags for identification — this is intentional and should be preserved
-- `buildOnHost` mode also has the same `commitTag` in its `tags` array (line 228)
+## Next Steps
+
+- [ ] **Run `pulumi up`** to apply the one-time migration (user must confirm)
+- [ ] **Verify clean preview** — run `pulumi preview` after up to confirm no spurious changes
+- [ ] **Create PR** to main
+- [ ] **Clean up** — update/delete this memory
+
+## Key Design Decisions
+- `docker.Tag` is a leaf node — `targetImage` changes every commit but nothing depends on its outputs
+- `tagTriggers: [image.digest]` gates re-creation on content change
+- Version tag in `docker_build.Image.tags` is stable (comes from stack config, not git)
+- `pullTriggers: [image.digest]` on RemoteImage gates re-pull on content change
 
 ## IMPORTANT
 Always check with the user before proceeding with the next todo item. If all work is done, ask the user if they want to delete this memory.
