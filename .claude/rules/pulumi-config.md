@@ -40,7 +40,7 @@ cfg.require("provider");           // plain string, fails if missing
 cfg.get("sshKeyId");               // optional string (auto-generates SSH key if omitted)
 cfg.getBoolean("dockerhubPush");   // optional boolean (default: false)
 cfg.getBoolean("autoUpdate");      // optional boolean (default: false)
-cfg.getObject<HetznerConfig>("hetzner"); // optional provider-specific config
+cfg.getObject<HetznerConfig>("hetzner"); // optional provider-specific config (validated at runtime)
 cfg.requireSecret("tailscaleAuthKey"); // secret string
 cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 ```
@@ -60,8 +60,8 @@ cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 
 ## Component Argument Patterns
 Components accept typed args interfaces (5 per gateway, plus shared infra):
-- `ServerArgs`: provider, serverType, region?, sshKeyId?, compartmentId?, subnetId?, ocpus?, memoryInGbs?
-- `HostBootstrapArgs`: connection
+- `ServerArgs`: provider, serverType, region?, sshKeyId?, image?, hetzner?, compartmentId?, subnetId?, ocpus?, memoryInGbs?
+- `HostBootstrapArgs`: connection, autoUpdate?
 - `EnvoyEgressArgs`: connection, egressPolicy
 - `GatewayImageArgs`: dockerHost, profile, version, installBrowser?, imageSteps?
 - `TailscaleSidecarArgs`: connection, dockerHost, profile, port, tailscaleAuthKey, tcpPortMappings?

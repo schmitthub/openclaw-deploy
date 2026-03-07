@@ -122,11 +122,11 @@ export class GatewayImage extends pulumi.ComponentResource {
       throw new Error(`Invalid characters in Docker tag: ${commitTag}`);
     }
 
-    // Build locally and push to Docker Hub (both version tag and commit SHA tag)
+    // Build locally and push to Docker Hub (stable version tag only — commit tag applied separately)
     const image = new docker_build.Image(
       `${name}-image`,
       {
-        tags: [remoteTag, commitTag],
+        tags: [remoteTag],
         dockerfile: { location: path.join(tempDir, "Dockerfile") },
         context: { location: tempDir },
         push: true,
@@ -160,12 +160,12 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Pull by commit SHA tag — the tag name changes every commit, forcing a re-pull.
+    // Pull by stable version tag — re-pull gated by digest (content change).
     // Use docker.io/ prefix so the provider matches registryAuth address.
     const pullTag =
-      commitTag.includes("/") && !commitTag.includes(".")
-        ? `docker.io/${commitTag}`
-        : commitTag;
+      remoteTag.includes("/") && !remoteTag.includes(".")
+        ? `docker.io/${remoteTag}`
+        : remoteTag;
     const pulled = new docker.RemoteImage(
       `${name}-pull`,
       {
@@ -174,6 +174,17 @@ export class GatewayImage extends pulumi.ComponentResource {
         keepLocally: true,
       },
       { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
+    );
+
+    // Apply commit SHA tag on VPS for traceability (docker images shows which commit built this)
+    new docker.Tag(
+      `${name}-commit-tag`,
+      {
+        sourceImage: pullTag,
+        targetImage: commitTag,
+        tagTriggers: [image.digest],
+      },
+      { parent: this, provider: remoteDockerProvider, dependsOn: [pulled] },
     );
 
     // Prune dangling images on VPS after pull
@@ -188,7 +199,7 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this, dependsOn: [pulled] },
     );
 
-    // Return the commit-tagged image name (matches what was pulled on the VPS)
+    // Return the stable version-tagged image name (digest gates downstream updates)
     return { imageName: pulumi.output(pullTag), imageDigest: image.digest };
   }
 
@@ -225,7 +236,7 @@ export class GatewayImage extends pulumi.ComponentResource {
     const image = new docker_build.Image(
       `${name}-image`,
       {
-        tags: [tag, commitTag],
+        tags: [tag],
         dockerfile: { location: path.join(tempDir, "Dockerfile") },
         context: { location: tempDir },
         load: true,
@@ -233,6 +244,22 @@ export class GatewayImage extends pulumi.ComponentResource {
         buildOnPreview: false,
       },
       { parent: this, provider: buildProvider },
+    );
+
+    // Apply commit SHA tag on VPS for traceability (docker images shows which commit built this)
+    const remoteDockerProvider = new docker.Provider(
+      `${name}-docker-provider`,
+      { host: args.dockerHost },
+      { parent: this },
+    );
+    new docker.Tag(
+      `${name}-commit-tag`,
+      {
+        sourceImage: tag,
+        targetImage: commitTag,
+        tagTriggers: [image.digest],
+      },
+      { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
     );
 
     // Prune dangling images after build (previous untagged builds)

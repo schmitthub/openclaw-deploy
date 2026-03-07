@@ -12,7 +12,12 @@ import {
   GatewayInit,
   Gateway,
 } from "./components";
-import type { EgressRule, GatewayConfig, VpsProvider } from "./config/types";
+import type {
+  EgressRule,
+  GatewayConfig,
+  HetznerConfig,
+  VpsProvider,
+} from "./config/types";
 import { PROVIDERS } from "./config/defaults";
 import { renderAgentPrompt } from "./templates";
 
@@ -71,6 +76,22 @@ if (duplicates.length > 0) {
 // --- Component Composition ---
 // Server → HostBootstrap → {EnvoyEgress, GatewayImage, TailscaleSidecar} → EnvoyProxy → GatewayInit → Gateway
 
+// Provider-specific config validation
+const hetznerConfig = cfg.getObject<HetznerConfig>("hetzner");
+if (hetznerConfig !== undefined) {
+  if (typeof hetznerConfig !== "object" || hetznerConfig === null) {
+    throw new Error(
+      `Invalid "hetzner" config: expected an object (e.g. { backups: true }), got ${typeof hetznerConfig}. ` +
+        `Check your Pulumi.<stack>.yaml formatting.`,
+    );
+  }
+  if (provider !== "hetzner") {
+    pulumi.log.warn(
+      `"hetzner" config is set but provider is "${provider}". Hetzner-specific options will be ignored.`,
+    );
+  }
+}
+
 // 1. Provision VPS
 const server = new Server("server", {
   provider,
@@ -81,7 +102,7 @@ const server = new Server("server", {
   ...(subnetId && { subnetId }),
   ...(ocpus !== undefined && { ocpus }),
   ...(memoryInGbs !== undefined && { memoryInGbs }),
-  hetzner: cfg.getObject<{ backups?: boolean }>("hetzner"),
+  hetzner: hetznerConfig,
 });
 
 // 2. Install Docker + fail2ban on the host (Tailscale runs inside gateway containers)

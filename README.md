@@ -414,7 +414,7 @@ Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for 
 | `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                               |
 | `dockerhubPush`              | boolean                                       | no       | Build locally and push to Docker Hub (default: `false`)                        |
 | `autoUpdate`                 | boolean                                       | no       | Enable automatic security updates via `unattended-upgrades` (default: `false`) |
-| `hetzner`                    | object                                        | no       | Hetzner-specific options (see below)                                           |
+| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (see below)                                           |
 | `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                |
 | `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` env vars for init + runtime                             |
 

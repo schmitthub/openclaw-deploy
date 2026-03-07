@@ -36,14 +36,16 @@ export class HostBootstrap extends pulumi.ComponentResource {
     );
 
     // Step 1a: Enable automatic security updates via unattended-upgrades (opt-in).
+    let enableAutoUpdates: command.remote.Command | undefined;
     if (args.autoUpdate) {
       const UNATTENDED_CMD = [
         "DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades",
         `printf 'APT::Periodic::Update-Package-Lists "1";\\nAPT::Periodic::Unattended-Upgrade "1";\\n' > /etc/apt/apt.conf.d/20auto-upgrades`,
         "systemctl enable unattended-upgrades",
         "systemctl restart unattended-upgrades",
+        "systemctl is-active unattended-upgrades",
       ].join(" && ");
-      new command.remote.Command(
+      enableAutoUpdates = new command.remote.Command(
         `${name}-unattended-upgrades`,
         {
           connection: args.connection,
@@ -73,7 +75,12 @@ export class HostBootstrap extends pulumi.ComponentResource {
       { parent: this, dependsOn: [installDocker] },
     );
 
-    this.dockerReady = configureAcceptEnv.stdout.apply(() => "ready");
+    // dockerReady waits for all bootstrap steps
+    const bootstrapOutputs: pulumi.Output<string>[] = [
+      configureAcceptEnv.stdout,
+    ];
+    if (enableAutoUpdates) bootstrapOutputs.push(enableAutoUpdates.stdout);
+    this.dockerReady = pulumi.all(bootstrapOutputs).apply(() => "ready");
 
     const conn = pulumi.output(args.connection);
     const hostIp = conn.apply((c) => c.host);

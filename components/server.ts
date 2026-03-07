@@ -3,7 +3,7 @@ import * as hcloud from "@pulumi/hcloud";
 import * as digitalocean from "@pulumi/digitalocean";
 import * as oci from "@pulumi/oci";
 import * as tls from "@pulumi/tls";
-import { VpsProvider } from "../config";
+import { VpsProvider, HetznerConfig } from "../config";
 import {
   OCI_ARM_SHAPE_PREFIX,
   OCI_DEFAULT_OCPUS,
@@ -17,7 +17,7 @@ export interface ServerArgs {
   region?: pulumi.Input<string>; // Required for Hetzner/DO. Oracle auto-discovers availability domain if omitted.
   sshKeyId?: pulumi.Input<string>; // Key ID (Hetzner), fingerprint (DO), or SSH public key content (OCI). Auto-generated if omitted.
   image?: pulumi.Input<string>; // e.g. "ubuntu-24.04" (Hetzner), "ubuntu-24-04-x64" (DO), image OCID (OCI). Oracle auto-discovers if omitted.
-  hetzner?: { backups?: boolean }; // Hetzner-specific options
+  hetzner?: HetznerConfig; // Hetzner-specific options
   // OCI-specific
   compartmentId?: pulumi.Input<string>; // OCI compartment OCID (required for Oracle)
   subnetId?: pulumi.Input<string>; // OCI subnet OCID. Auto-creates VCN + networking if omitted.

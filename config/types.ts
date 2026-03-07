@@ -69,6 +69,9 @@ export interface StackConfig {
   // Egress
   egressPolicy: EgressRule[];
 
+  // Host management
+  autoUpdate?: boolean; // automatic security updates via unattended-upgrades (default: false)
+
   // Build
   dockerhubPush?: boolean; // build locally + push to Docker Hub (default: false)
 
