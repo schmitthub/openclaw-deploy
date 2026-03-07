@@ -60,12 +60,18 @@ function renderPathRoutes(pathRules: PathRule[]): string {
   return lines.join("\n");
 }
 
+/** Escape wildcard `*` in domain for use in filenames and Envoy stat prefixes. */
+function safeFileDomain(domain: string): string {
+  return domain.replace(/\*/g, "_wildcard_");
+}
+
 /** Render a single MITM filter chain for an inspected domain. */
 function renderMitmFilterChain(config: MitmDomainConfig): string {
   const { domain, pathRules } = config;
-  const safeName = domain.replace(/\./g, "_");
-  const certPath = `${ENVOY_MITM_CERTS_CONTAINER_DIR}/${domain}-cert.pem`;
-  const keyPath = `${ENVOY_MITM_CERTS_CONTAINER_DIR}/${domain}-key.pem`;
+  const safeName = safeFileDomain(domain).replace(/\./g, "_");
+  const fileDomain = safeFileDomain(domain);
+  const certPath = `${ENVOY_MITM_CERTS_CONTAINER_DIR}/${fileDomain}-cert.pem`;
+  const keyPath = `${ENVOY_MITM_CERTS_CONTAINER_DIR}/${fileDomain}-key.pem`;
   const routeEntries = renderPathRoutes(pathRules);
 
   return `    # MITM TLS inspection: ${domain}
@@ -230,18 +236,11 @@ export function renderEnvoyConfig(
           break;
         }
         if (rule.inspect) {
-          if (rule.dst.includes("*")) {
-            warnings.push(
-              `Wildcard domain "${rule.dst}" cannot use MITM inspection — treating as passthrough`,
-            );
-            passthroughDomains.push(rule.dst);
-          } else {
-            inspectedDomains.push(rule.dst);
-            mitmConfigs.push({
-              domain: rule.dst,
-              pathRules: rule.pathRules ?? [],
-            });
-          }
+          inspectedDomains.push(rule.dst);
+          mitmConfigs.push({
+            domain: rule.dst,
+            pathRules: rule.pathRules ?? [],
+          });
         } else {
           passthroughDomains.push(rule.dst);
         }

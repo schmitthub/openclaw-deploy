@@ -466,6 +466,27 @@ describe("renderEnvoyConfig", () => {
       expect(yaml).toContain(`cluster: ${ENVOY_MITM_CLUSTER_NAME}`);
     });
 
+    it("creates MITM filter chain for wildcard inspect:true rules", () => {
+      const rules: EgressRule[] = [
+        {
+          dst: "*.example.com",
+          proto: "tls",
+          action: "allow",
+          inspect: true,
+        },
+      ];
+      const { yaml, warnings, inspectedDomains } = renderEnvoyConfig(rules);
+      expect(warnings).toHaveLength(0);
+      expect(inspectedDomains).toContain("*.example.com");
+      expect(yaml).toContain("DownstreamTlsContext");
+      // Wildcard escaped in filenames but preserved in server_names
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/_wildcard_.example.com-cert.pem`,
+      );
+      expect(yaml).toContain('"*.example.com"');
+      expect(yaml).toContain(`cluster: ${ENVOY_MITM_CLUSTER_NAME}`);
+    });
+
     it("does not include inspected domain in passthrough server_names", () => {
       const rules: EgressRule[] = [
         { dst: "api.slack.com", proto: "tls", action: "allow", inspect: true },

@@ -108,15 +108,19 @@ export class EnvoyEgress extends pulumi.ComponentResource {
     );
 
     // Step 2b: Generate per-domain certificates for MITM inspection (idempotent).
+    // Supports wildcards (e.g. *.example.com) — wildcard certs cover single-level subdomains.
     const HOSTNAME_RE =
-      /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+      /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
     for (const domain of envoyConfig.inspectedDomains) {
       if (!HOSTNAME_RE.test(domain)) {
         throw new Error(`Invalid domain for MITM cert generation: ${domain}`);
       }
-      const safeName = domain.replace(/\./g, "-");
-      const certPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${domain}-cert.pem`;
-      const keyPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${domain}-key.pem`;
+      // Escape * for filenames and Pulumi resource names (filesystem-safe).
+      const fileDomain = domain.replace(/\*/g, "_wildcard_");
+      const safeName = fileDomain.replace(/\./g, "-");
+      const certPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${fileDomain}-cert.pem`;
+      const keyPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${fileDomain}-key.pem`;
+      const tmpPrefix = `/tmp/${fileDomain}`;
 
       new command.remote.Command(
         `${name}-cert-${safeName}`,
@@ -126,13 +130,13 @@ export class EnvoyEgress extends pulumi.ComponentResource {
             `mkdir -p ${ENVOY_MITM_CERTS_HOST_DIR}`,
             `[ -f "${certPath}" ] || (` +
               `openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes` +
-              ` -subj "/CN=${domain}" -keyout "${keyPath}" -out "/tmp/${domain}.csr"` +
-              ` && printf "subjectAltName=DNS:${domain}" > "/tmp/${domain}.ext"` +
-              ` && openssl x509 -req -in "/tmp/${domain}.csr"` +
+              ` -subj "/CN=${domain}" -keyout "${keyPath}" -out "${tmpPrefix}.csr"` +
+              ` && printf "subjectAltName=DNS:${domain}" > "${tmpPrefix}.ext"` +
+              ` && openssl x509 -req -in "${tmpPrefix}.csr"` +
               ` -CA ${ENVOY_CA_CERT_PATH} -CAkey ${ENVOY_CA_KEY_PATH}` +
-              ` -CAcreateserial -days 365 -extfile "/tmp/${domain}.ext"` +
+              ` -CAcreateserial -days 365 -extfile "${tmpPrefix}.ext"` +
               ` -out "${certPath}"` +
-              ` && rm -f "/tmp/${domain}.csr" "/tmp/${domain}.ext"` +
+              ` && rm -f "${tmpPrefix}.csr" "${tmpPrefix}.ext"` +
               ` && chmod 644 "${certPath}" && chmod 600 "${keyPath}"` +
               `)`,
           ].join(" && "),
