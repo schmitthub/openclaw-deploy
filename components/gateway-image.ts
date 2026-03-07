@@ -1,5 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as command from "@pulumi/command";
+import * as docker from "@pulumi/docker";
 import * as docker_build from "@pulumi/docker-build";
 import * as fs from "fs";
 import * as os from "os";
@@ -24,7 +25,7 @@ export interface GatewayImageArgs {
   installBrowser?: boolean;
   /** Custom Dockerfile RUN instructions (after openclaw install, before entrypoint COPY) */
   imageSteps?: ImageStep[];
-  /** Push to Docker Hub instead of building on VPS. Requires DOCKERHUB_* env vars. */
+  /** Push to Docker Hub instead of building on VPS. Uses DOCKER_REGISTRY_REPO for image tag prefix; auth via DOCKER_REGISTRY_USER + DOCKER_REGISTRY_PASS. */
   dockerhubPush?: boolean;
 }
 
@@ -68,23 +69,28 @@ export class GatewayImage extends pulumi.ComponentResource {
     });
   }
 
-  /** Build locally and push to Docker Hub. VPS pulls the image. */
+  /** Build locally and push to Docker Hub. VPS pulls via docker.RemoteImage. */
   private buildAndPush(
     name: string,
     args: GatewayImageArgs,
     tempDir: string,
   ): pulumi.Output<string> {
-    const registry = process.env.DOCKERHUB_REGISTRY;
-    const username = process.env.DOCKERHUB_USERNAME;
-    const token = process.env.DOCKERHUB_TOKEN;
+    const repo = process.env.DOCKER_REGISTRY_REPO;
+    const username = process.env.DOCKER_REGISTRY_USER;
+    const password = process.env.DOCKER_REGISTRY_PASS;
 
-    if (!registry || !username || !token) {
+    if (!repo || !username || !password) {
       throw new Error(
-        "dockerhubPush requires DOCKERHUB_REGISTRY, DOCKERHUB_USERNAME, and DOCKERHUB_TOKEN env vars",
+        "dockerhubPush requires DOCKER_REGISTRY_REPO, DOCKER_REGISTRY_USER, and DOCKER_REGISTRY_PASS env vars",
       );
     }
 
-    const remoteTag = `${registry}/openclaw-gateway-${args.profile}:${args.version}`;
+    const remoteTag = `${repo}:${args.profile}-${args.version}`;
+
+    const SAFE_DOCKER_RE = /^[a-zA-Z0-9._\-/:]+$/;
+    if (!SAFE_DOCKER_RE.test(remoteTag)) {
+      throw new Error(`Invalid characters in Docker tag: ${remoteTag}`);
+    }
 
     // Build locally and push to Docker Hub
     const image = new docker_build.Image(
@@ -98,41 +104,45 @@ export class GatewayImage extends pulumi.ComponentResource {
         buildOnPreview: false,
         registries: [
           {
-            address: registry,
+            address: repo,
             username,
-            password: token,
+            password: pulumi.secret(password),
           },
         ],
       },
       { parent: this },
     );
 
-    // Ensure VPS can pull the image (docker login on remote host).
-    // Token is passed via environment to avoid shell interpolation.
-    const dockerLogin = new command.remote.Command(
-      `${name}-docker-login`,
+    // Pull on VPS via docker.RemoteImage with provider-level registryAuth.
+    // Address must be "docker.io" for Docker Hub (provider normalizes internally).
+    const remoteDockerProvider = new docker.Provider(
+      `${name}-docker-provider`,
       {
-        connection: args.connection,
-        environment: {
-          DOCKERHUB_TOKEN: token,
-          DOCKERHUB_REGISTRY: registry,
-          DOCKERHUB_USERNAME: username,
-        },
-        create: `echo "$DOCKERHUB_TOKEN" | docker login "$DOCKERHUB_REGISTRY" -u "$DOCKERHUB_USERNAME" --password-stdin`,
-        logging: "none",
+        host: args.dockerHost,
+        registryAuth: [
+          {
+            address: "docker.io",
+            username,
+            password: pulumi.secret(password),
+          },
+        ],
       },
-      { parent: this, additionalSecretOutputs: ["stdout", "stderr"] },
+      { parent: this },
     );
 
-    // Pull the image on the VPS
-    new command.remote.Command(
+    // Use docker.io/ prefix so the provider matches registryAuth address
+    const pullTag =
+      remoteTag.includes("/") && !remoteTag.includes(".")
+        ? `docker.io/${remoteTag}`
+        : remoteTag;
+    const pulled = new docker.RemoteImage(
       `${name}-pull`,
       {
-        connection: args.connection,
-        create: `docker pull ${remoteTag}`,
-        triggers: [image.ref],
+        name: pullTag,
+        pullTriggers: [image.ref],
+        keepLocally: true,
       },
-      { parent: this, dependsOn: [image, dockerLogin] },
+      { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
     );
 
     // Prune dangling images on VPS after pull
@@ -140,34 +150,17 @@ export class GatewayImage extends pulumi.ComponentResource {
       `${name}-prune`,
       {
         connection: args.connection,
-        create: "docker image prune -f 2>&1 || true",
-        triggers: [image.ref],
+        create:
+          "docker image prune -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
+        triggers: [pulled.repoDigest],
       },
-      { parent: this, dependsOn: [image] },
+      { parent: this, dependsOn: [pulled] },
     );
 
-    return image.tags.apply((tags) => {
-      if (!tags || tags.length === 0) {
-        throw new Error(`No tags found for image ${name}`);
-      }
-      return tags[0];
-    });
+    return firstTag(image, name);
   }
 
-  /**
-   * Build on the VPS via DOCKER_HOST=ssh://.
-   *
-   * WARNING: The @pulumi/docker-build provider creates an unmanaged BuildKit
-   * container on the remote host whose build cache cannot be pruned via the
-   * Docker CLI (pulumi/pulumi-docker-build#65). Build cache will accumulate
-   * over time. To reclaim disk space, SSH into the VPS and run:
-   *
-   *   docker ps --filter name=buildx_buildkit -q \
-   *     | xargs -r -I{} docker exec {} buildctl prune --keep-storage 2048
-   *
-   * Consider setting `dockerhubPush: true` in stack config to build locally
-   * and push to Docker Hub instead, which avoids this issue entirely.
-   */
+  /** Build on the VPS via DOCKER_HOST=ssh://. Emits a warning about BuildKit cache accumulation. */
   private buildOnHost(
     name: string,
     args: GatewayImageArgs,
@@ -182,7 +175,7 @@ export class GatewayImage extends pulumi.ComponentResource {
         "(pulumi/pulumi-docker-build#65). To reclaim space, SSH into the VPS and run:",
         "",
         "  docker ps --filter name=buildx_buildkit -q \\",
-        "    | xargs -r -I{} docker exec {} buildctl prune --keep-storage 2048",
+        "    | xargs -r -I{} docker exec {} buildctl prune --keep-storage 2048  # MB (~2GB)",
         "",
         "To avoid this, set `dockerhubPush: true` in stack config to build locally",
         "and push to Docker Hub instead.",
@@ -214,19 +207,27 @@ export class GatewayImage extends pulumi.ComponentResource {
       `${name}-prune`,
       {
         connection: args.connection,
-        create: "docker image prune -f 2>&1 || true",
+        create:
+          "docker image prune -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
         triggers: [image.ref],
       },
       { parent: this, dependsOn: [image] },
     );
 
-    return image.tags.apply((tags) => {
-      if (!tags || tags.length === 0) {
-        throw new Error(`No tags found for image ${name}`);
-      }
-      return tags[0];
-    });
+    return firstTag(image, name);
   }
+}
+
+function firstTag(
+  image: docker_build.Image,
+  name: string,
+): pulumi.Output<string> {
+  return image.tags.apply((tags) => {
+    if (!tags || tags.length === 0) {
+      throw new Error(`No tags found for image ${name}`);
+    }
+    return tags[0];
+  });
 }
 
 /** Write file only if content differs from what's on disk — preserves mtime for stable BuildKit context hashing. */

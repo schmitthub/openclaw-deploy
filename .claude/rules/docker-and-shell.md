@@ -117,7 +117,9 @@ Deployed via `TS_SERVE_CONFIG` env var on the sidecar — no dynamic `tailscale 
 - **Init containers** (`GatewayInit` component): gateway config is written _before_ the gateway container starts via ephemeral CLI containers (`docker run --rm --network none --user node`). Each `setupCommand` is a separate `command.remote.Command` resource. Env var scanning detects which commands reference `$TAILSCALE_SERVE_HOST` — only those re-run on hostname change.
 - **Secrets never persist on disk.** Init containers use `export SECRET='val' && docker run -e SECRET && unset SECRET`. No env files. `logging: "none"` and `additionalSecretOutputs` suppress secrets in Pulumi logs.
 - `gatewaySecretEnv-<profile>` (secret, optional): JSON `{"KEY":"value"}` map injected into both init containers and the main gateway container. Set via `pulumi config set --secret gatewaySecretEnv-<profile> '{"OPENROUTER_API_KEY":"sk-or-..."}'`.
-- **Image builds** (`GatewayImage` component): `@pulumi/docker-build` (BuildKit) builds `openclaw-gateway-<profile>:<version>`. Templates rendered locally to temp dir, BuildKit transfers context to remote Docker. No base64 Dockerfile uploads.
+- **Image builds** (`GatewayImage` component) have two modes controlled by `dockerhubPush` stack config:
+  - **`dockerhubPush: true`**: Build locally, push to Docker Hub, pull on VPS via `docker.RemoteImage`. Requires `DOCKER_REGISTRY_REPO`, `DOCKER_REGISTRY_USER`, `DOCKER_REGISTRY_PASS` env vars. Build cache stays local.
+  - **`dockerhubPush: false` (default)**: Build on VPS via `@pulumi/docker-build` (BuildKit) with `DOCKER_HOST=ssh://`. Known limitation: the provider creates an unmanaged BuildKit container whose cache accumulates on disk ([pulumi/pulumi-docker-build#65](https://github.com/pulumi/pulumi-docker-build/issues/65)). Manual cleanup required — see warning emitted during `pulumi up`.
 
 ## Template Code Conventions
 - Templates live in `templates/` and are **pure functions** returning strings

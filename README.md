@@ -535,11 +535,11 @@ openclaw-deploy:dockerhubPush: true
 
 **Required environment variables** (when `dockerhubPush: true`):
 
-| Variable             | Description                                      |
-| -------------------- | ------------------------------------------------ |
-| `DOCKERHUB_REGISTRY` | Registry address (e.g. `docker.io/yourusername`) |
-| `DOCKERHUB_USERNAME` | Docker Hub username                              |
-| `DOCKERHUB_TOKEN`    | Docker Hub access token                          |
+| Variable               | Description                                   |
+| ---------------------- | --------------------------------------------- |
+| `DOCKER_REGISTRY_REPO` | Registry repo (e.g. `docker.io/yourusername`) |
+| `DOCKER_REGISTRY_USER` | Docker Hub username                           |
+| `DOCKER_REGISTRY_PASS` | Docker Hub access token                       |
 
 **If using the default SSH build mode** (`dockerhubPush: false`), build cache will accumulate on the VPS. To reclaim disk space, SSH into the VPS and run:
 
