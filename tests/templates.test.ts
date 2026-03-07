@@ -112,7 +112,7 @@ describe("renderDockerfile", () => {
   it("sets CMD to openclaw gateway with port only (no --tailscale)", () => {
     const df = renderDockerfile(defaultOpts);
     expect(df).toContain(
-      `CMD ["openclaw", "gateway", "--port", "${DEFAULT_GATEWAY_PORT}"]`,
+      `CMD ["openclaw", "gateway", "run", "--port", "${DEFAULT_GATEWAY_PORT}"]`,
     );
     expect(df).not.toContain("--tailscale");
   });

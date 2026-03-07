@@ -77,7 +77,7 @@ services:
       DISCORD_SERVER_ID: ${DISCORD_SERVER_ID:-}
     init: true
     restart: unless-stopped
-    command: ["openclaw", "gateway", "--bind", "loopback", "--port", "18789"]
+    command: ["openclaw", "gateway", "run", "--bind", "loopback", "--port", "18789"]
     volumes:
       - openclaw-home:/home/node
       - openclaw-linuxbrew:/home/linuxbrew/.linuxbrew

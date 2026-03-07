@@ -110,6 +110,7 @@ export class Gateway extends pulumi.ComponentResource {
         command: [
           "openclaw",
           "gateway",
+          "run",
           "--bind",
           "loopback",
           "--port",

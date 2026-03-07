@@ -40,7 +40,7 @@ Remote paths: `/opt/openclaw-deploy/build/<profile>/` (sidecar files), `/opt/ope
 - Optional `OPENCLAW_INSTALL_BROWSER` ARG: bakes Playwright + Chromium + Xvfb (~300MB)
 - `COPY entrypoint.sh /usr/local/bin/entrypoint.sh` — root-owned, 0755
 - `ENTRYPOINT ["entrypoint.sh"]` runs as root to start sshd, then drops to `node`
-- `CMD ["openclaw", "gateway", "--port", "18789"]` (overridden by container command)
+- `CMD ["openclaw", "gateway", "run", "--port", "18789"]` (overridden by container command)
 - `OPENCLAW_DOCKER_APT_PACKAGES` ARG for optional additional packages via `packages` config
 - `OPENCLAW_PREFER_PNPM=1` env var (Bun may fail on ARM/Synology)
 - `OPENCLAW_BRIDGE_PORT=18790` and `OPENCLAW_GATEWAY_BIND=loopback` env vars
@@ -108,7 +108,7 @@ Deployed via `TS_SERVE_CONFIG` env var on the sidecar — no dynamic `tailscale 
 - **Tailscale sidecar** (`tailscale-<profile>`, `TailscaleSidecar` component): uses `tailscale/tailscale:v1.94.2` image, `capabilities.adds: [NET_ADMIN]`, `dns: [1.1.1.2, 1.0.0.2]`, runs on bridge network. Owns the shared network namespace. Env: `TS_AUTHKEY`, `TS_STATE_DIR`, `TS_USERSPACE=false`, `TS_SERVE_CONFIG`, `TS_ENABLE_HEALTH_CHECK=true`, `ENVOY_UID=101`, `OPENCLAW_TCP_MAPPINGS`. Devices: `/dev/net/tun`. Healthcheck: `wget -q --spider http://localhost:9002/healthz || wget -q --spider http://127.0.0.1:9002/healthz`. Outputs: `containerName`, `tailscaleHostname`, `networkName`.
 - **Envoy container** (`envoy-<profile>`, `EnvoyProxy` component): `network_mode: container:tailscale-<profile>`. No `networksAdvanced`, no `dns` (inherited). Env: `ENVOY_UID=101`. Labels: `openclaw.config-hash` (triggers replacement on config change). Volumes: envoy.yaml, CA cert, MITM certs. Healthcheck: `echo > /dev/tcp/localhost/10000`. Outputs: `envoyReady`.
 - **Gateway container** (`openclaw-gateway-<profile>`, `Gateway` component): `network_mode: container:tailscale-<profile>` (shared netns). No `CAP_NET_ADMIN`, no `dns` (inherited), no `networksAdvanced` (mutually exclusive with networkMode). Labels: `openclaw.init-hash` (triggers replacement on init changes), `openclaw.config-hash` (triggers replacement on egress policy/Corefile changes).
-- Gateway has `init: true`, `restart: unless-stopped`, command: `openclaw gateway --bind loopback --port <port>`
+- Gateway has `init: true`, `restart: unless-stopped`, command: `openclaw gateway run --bind loopback --port <port>`
 - No `HTTP_PROXY`/`HTTPS_PROXY` env vars — iptables REDIRECT in sidecar handles all routing transparently
 - `OPENCLAW_TCP_MAPPINGS` env var (optional): semicolon-delimited `dst|dstPort|envoyPort` entries for SSH/TCP egress. Set on the **sidecar** container. Processed by sidecar-entrypoint.sh to create per-destination iptables REDIRECT rules.
 - `OPENCLAW_GATEWAY_TOKEN` env var (secret): gateway auth token, always set on gateway container.

@@ -149,4 +149,4 @@ ENV OPENCLAW_NO_RESPAWN=1
 ENV NODE_COMPILE_CACHE=/home/node/.node-compile-cache
 
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["openclaw", "gateway", "--port", "18789"]
+CMD ["openclaw", "gateway", "run", "--port", "18789"]

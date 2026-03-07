@@ -169,7 +169,7 @@ ENV OPENCLAW_BRIDGE_PORT=18790
 ENV OPENCLAW_GATEWAY_BIND=loopback
 
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["openclaw", "gateway", "--port", "${gatewayPort}"]
+CMD ["openclaw", "gateway", "run", "--port", "${gatewayPort}"]
 `;
 }
 
