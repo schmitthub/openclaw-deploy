@@ -8,6 +8,8 @@ import {
   ENVOY_CA_KEY_PATH,
   ENVOY_MITM_CERTS_HOST_DIR,
   COREDNS_CONFIG_HOST_DIR,
+  DOMAIN_VALIDATION_RE,
+  safeFileDomain,
 } from "../config";
 import {
   renderEnvoyConfig,
@@ -107,16 +109,24 @@ export class EnvoyEgress extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Step 2b: Generate per-domain certificates for MITM inspection (idempotent).
-    // Supports wildcards (e.g. *.example.com) — wildcard certs cover single-level subdomains.
-    const HOSTNAME_RE =
-      /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+    // Step 2b: Generate per-domain certificates for MITM inspection.
+    // Supports wildcards (e.g. *.example.com) — matches single-level subdomains
+    // in both SNI filter chain matching and the generated certificate's SAN.
+    // Regenerates if cert is missing, corrupt, expiring within 30 days, or not
+    // signed by the current CA.
     for (const domain of envoyConfig.inspectedDomains) {
-      if (!HOSTNAME_RE.test(domain)) {
+      if (!DOMAIN_VALIDATION_RE.test(domain)) {
         throw new Error(`Invalid domain for MITM cert generation: ${domain}`);
       }
-      // Escape * for filenames and Pulumi resource names (filesystem-safe).
-      const fileDomain = domain.replace(/\*/g, "_wildcard_");
+      // Defense-in-depth: domain must not contain shell metacharacters.
+      // DOMAIN_VALIDATION_RE already validates this, but belt-and-suspenders
+      // for a value that gets interpolated into a remote shell command.
+      if (/[^a-zA-Z0-9.*-]/.test(domain)) {
+        throw new Error(
+          `Domain "${domain}" contains characters unsafe for shell interpolation`,
+        );
+      }
+      const fileDomain = safeFileDomain(domain);
       const safeName = fileDomain.replace(/\./g, "-");
       const certPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${fileDomain}-cert.pem`;
       const keyPath = `${ENVOY_MITM_CERTS_HOST_DIR}/${fileDomain}-key.pem`;
@@ -128,7 +138,12 @@ export class EnvoyEgress extends pulumi.ComponentResource {
           connection: args.connection,
           create: [
             `mkdir -p ${ENVOY_MITM_CERTS_HOST_DIR}`,
-            `[ -f "${certPath}" ] || (` +
+            // Regenerate if: missing, corrupt, expiring within 30 days (2592000s),
+            // or not signed by current CA.
+            `([ -f "${certPath}" ]` +
+              ` && openssl x509 -in "${certPath}" -checkend 2592000 -noout 2>/dev/null` +
+              ` && openssl verify -CAfile ${ENVOY_CA_CERT_PATH} "${certPath}" >/dev/null 2>&1` +
+              `) || (` +
               `openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes` +
               ` -subj "/CN=${domain}" -keyout "${keyPath}" -out "${tmpPrefix}.csr"` +
               ` && printf "subjectAltName=DNS:${domain}" > "${tmpPrefix}.ext"` +

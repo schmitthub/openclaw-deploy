@@ -5,6 +5,8 @@ import {
   ENVOY_TCP_PORT_BASE,
   ENVOY_MITM_CERTS_CONTAINER_DIR,
   ENVOY_MITM_CLUSTER_NAME,
+  DOMAIN_VALIDATION_RE,
+  safeFileDomain,
 } from "../config/defaults";
 
 export interface EnvoyConfigResult {
@@ -58,11 +60,6 @@ function renderPathRoutes(pathRules: PathRule[]): string {
                   cluster: ${ENVOY_MITM_CLUSTER_NAME}`);
 
   return lines.join("\n");
-}
-
-/** Escape wildcard `*` in domain for use in filenames and Envoy stat prefixes. */
-function safeFileDomain(domain: string): string {
-  return domain.replace(/\*/g, "_wildcard_");
 }
 
 /** Render a single MITM filter chain for an inspected domain. */
@@ -208,8 +205,6 @@ function renderTcpCluster(mapping: TcpPortMapping): string {
  * TLS rules with inspect:true use MITM termination for path-level filtering.
  * All other TLS rules use SNI-based passthrough (no TLS termination).
  */
-const DOMAIN_RE =
-  /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 export function renderEnvoyConfig(
@@ -231,7 +226,7 @@ export function renderEnvoyConfig(
     switch (rule.proto) {
       case "tls":
         // Validate domain before interpolating into YAML (CIDRs not valid for TLS)
-        if (!DOMAIN_RE.test(rule.dst) && !IP_RE.test(rule.dst)) {
+        if (!DOMAIN_VALIDATION_RE.test(rule.dst) && !IP_RE.test(rule.dst)) {
           warnings.push(`Invalid destination "${rule.dst}" — skipped`);
           break;
         }
@@ -250,7 +245,7 @@ export function renderEnvoyConfig(
       case "tcp": {
         // Validate destination before interpolating into YAML
         if (
-          !DOMAIN_RE.test(rule.dst) &&
+          !DOMAIN_VALIDATION_RE.test(rule.dst) &&
           !IP_RE.test(rule.dst) &&
           !rule.dst.includes("/") &&
           !rule.dst.includes(":")

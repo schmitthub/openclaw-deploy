@@ -6,11 +6,11 @@ export interface PathRule {
 }
 
 export interface EgressRule {
-  dst: string; // domain "x.com" | IPv4 "140.82.121.4" | IPv6 "2001:db8::1" | CIDR "10.0.0.0/24"
+  dst: string; // domain "x.com" | wildcard "*.example.com" | IPv4 "140.82.121.4" | IPv6 "2001:db8::1" | CIDR "10.0.0.0/24"
   proto: "tls" | "ssh" | "tcp"; // tls: SNI-based passthrough or MITM inspection; ssh/tcp: per-rule Envoy port mapping
   port?: number; // required for ssh/tcp, optional for tls (default 443)
   action: "allow" | "deny";
-  inspect?: boolean; // MITM TLS termination for path-level rules
+  inspect?: boolean; // MITM TLS termination for path-level filtering (supports wildcard domains)
   pathRules?: PathRule[]; // when inspect=true
 }
 

@@ -483,8 +483,50 @@ describe("renderEnvoyConfig", () => {
       expect(yaml).toContain(
         `${ENVOY_MITM_CERTS_CONTAINER_DIR}/_wildcard_.example.com-cert.pem`,
       );
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/_wildcard_.example.com-key.pem`,
+      );
       expect(yaml).toContain('"*.example.com"');
       expect(yaml).toContain(`cluster: ${ENVOY_MITM_CLUSTER_NAME}`);
+    });
+
+    it("creates MITM filter chain for multi-level wildcard *.a.b.com", () => {
+      const rules: EgressRule[] = [
+        {
+          dst: "*.cdn.example.com",
+          proto: "tls",
+          action: "allow",
+          inspect: true,
+        },
+      ];
+      const { yaml, warnings, inspectedDomains } = renderEnvoyConfig(rules);
+      expect(warnings).toHaveLength(0);
+      expect(inspectedDomains).toContain("*.cdn.example.com");
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/_wildcard_.cdn.example.com-cert.pem`,
+      );
+      expect(yaml).toContain(
+        `${ENVOY_MITM_CERTS_CONTAINER_DIR}/_wildcard_.cdn.example.com-key.pem`,
+      );
+      expect(yaml).toContain('"*.cdn.example.com"');
+    });
+
+    it("does not include wildcard inspected domain in passthrough server_names", () => {
+      const rules: EgressRule[] = [
+        {
+          dst: "*.example.com",
+          proto: "tls",
+          action: "allow",
+          inspect: true,
+        },
+        { dst: "other.com", proto: "tls", action: "allow" },
+      ];
+      const { yaml } = renderEnvoyConfig(rules);
+      const passthroughSection =
+        yaml.split("Whitelisted TLS domains")[1]?.split("Default deny")[0] ??
+        "";
+      expect(passthroughSection).not.toContain('"*.example.com"');
+      expect(passthroughSection).toContain('"other.com"');
     });
 
     it("does not include inspected domain in passthrough server_names", () => {
@@ -551,6 +593,75 @@ describe("renderEnvoyConfig", () => {
       const { warnings } = renderEnvoyConfig(rules);
       expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
         false,
+      );
+    });
+
+    it("accepts valid wildcard domain *.example.com", () => {
+      const rules: EgressRule[] = [
+        { dst: "*.example.com", proto: "tls", action: "allow" },
+      ];
+      const { warnings } = renderEnvoyConfig(rules);
+      expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
+        false,
+      );
+    });
+
+    it("rejects overly broad wildcard *.com (requires ≥2 labels)", () => {
+      const rules: EgressRule[] = [
+        { dst: "*.com", proto: "tls", action: "allow" },
+      ];
+      const { yaml, warnings } = renderEnvoyConfig(rules);
+      expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
+        true,
+      );
+      expect(yaml).not.toContain('"*.com"');
+    });
+
+    it("rejects mid-label wildcard foo.*.com", () => {
+      const rules: EgressRule[] = [
+        { dst: "foo.*.com", proto: "tls", action: "allow" },
+      ];
+      const { warnings } = renderEnvoyConfig(rules);
+      expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
+        true,
+      );
+    });
+
+    it("rejects double-asterisk wildcard **.example.com", () => {
+      const rules: EgressRule[] = [
+        { dst: "**.example.com", proto: "tls", action: "allow" },
+      ];
+      const { warnings } = renderEnvoyConfig(rules);
+      expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
+        true,
+      );
+    });
+
+    it("rejects bare wildcard *", () => {
+      const rules: EgressRule[] = [{ dst: "*", proto: "tls", action: "allow" }];
+      const { warnings } = renderEnvoyConfig(rules);
+      expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
+        true,
+      );
+    });
+
+    it("rejects wildcard without dot separator *com", () => {
+      const rules: EgressRule[] = [
+        { dst: "*com", proto: "tls", action: "allow" },
+      ];
+      const { warnings } = renderEnvoyConfig(rules);
+      expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
+        true,
+      );
+    });
+
+    it("rejects single-label wildcard *.io", () => {
+      const rules: EgressRule[] = [
+        { dst: "*.io", proto: "tls", action: "allow" },
+      ];
+      const { warnings } = renderEnvoyConfig(rules);
+      expect(warnings.some((w) => w.includes("Invalid destination"))).toBe(
+        true,
       );
     });
   });

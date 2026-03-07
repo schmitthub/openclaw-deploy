@@ -64,6 +64,20 @@ export const buildDir = (profile: string) =>
 export const dataDir = (profile: string) =>
   `/opt/openclaw-deploy/data/${profile}`;
 
+// Domain validation (shared between templates/envoy.ts and components/envoy.ts)
+// Accepts: "example.com", "*.example.com" (wildcard prefix only, requires ≥2 labels after *)
+// Rejects: "*.com" (too broad), "foo.*.com" (mid-label), "**.com", "*com", bare "*"
+// Uses + (not *) on the final group to require at least two labels total, preventing
+// overly broad wildcards like "*.com" that would match all .com subdomains.
+export const DOMAIN_VALIDATION_RE =
+  /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+
+/** Escape wildcard `*` in domain to produce filesystem-safe names.
+ *  e.g. "*.example.com" → "_wildcard_.example.com" */
+export function safeFileDomain(domain: string): string {
+  return domain.replace(/\*/g, "_wildcard_");
+}
+
 // Oracle Cloud (OCI) defaults
 export const OCI_ARM_SHAPE_PREFIX = "VM.Standard.A1";
 export const OCI_DEFAULT_OCPUS = 2;
