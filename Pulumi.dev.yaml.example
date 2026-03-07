@@ -1,20 +1,20 @@
 config:
+  openclaw-deploy:autoUpdate: "true"
+  openclaw-deploy:hetzner:
+    backups: true
+  openclaw-deploy:dockerhubPush: "true"
   openclaw-deploy:provider: hetzner
   openclaw-deploy:serverType: cx23
   openclaw-deploy:region: nbg1
-  # openclaw-deploy:dockerhubPush: true  # Build locally + push to Docker Hub (requires DOCKER_REGISTRY_REPO, DOCKER_REGISTRY_USER, DOCKER_REGISTRY_PASS env vars)
-  # openclaw-deploy:autoUpdate: true  # Enable automatic security updates via unattended-upgrades
-  # openclaw-deploy:hetzner:  # Hetzner-specific options
-  #   backups: true  # Enable automatic daily backups (+20% server cost)
   openclaw-deploy:egressPolicy:
     - action: allow
       dst: pythonhosted.org
       proto: tls
     - action: allow
-      dst: "*.pythonhosted.org"
+      dst: '*.pythonhosted.org'
       proto: tls
     - action: allow
-      dst: "*.pypi.org"
+      dst: '*.pypi.org'
       proto: tls
     - action: allow
       dst: pypi.org
@@ -23,7 +23,7 @@ config:
       dst: discord.com
       proto: tls
     - action: allow
-      dst: gateway.discord.gg
+      dst: '*.discord.gg'
       proto: tls
     - action: allow
       dst: cdn.discordapp.com
@@ -41,16 +41,40 @@ config:
       dst: api.telegram.org
       proto: tls
     - action: allow
-      dst: "*.x.com"
+      dst: '*.x.com'
       proto: tls
     - action: allow
-      dst: "*.twimg.com"
+      dst: '*.twimg.com'
       proto: tls
     - action: allow
       dst: x.com
       proto: tls
     - action: allow
       dst: twitter.com
+      proto: tls
+    - action: allow
+      dst: wttr.in
+      proto: tls
+    - action: allow
+      dst: api.open-meteo.com
+      proto: tls
+    - action: allow
+      dst: "*.github.com"
+      proto: tls
+    - action: allow
+      dst: "*.githubusercontent.com"
+      proto: tls
+    - action: allow
+      dst: "default.exp-tas.com"
+      proto: tls
+    - action: allow
+      dst: "*.githubcopilot.com"
+      proto: tls
+    - action: allow
+      dst: "*.individual.githubcopilot.com"
+      proto: tls
+    - action: allow
+      dst: t.co
       proto: tls
   openclaw-deploy:gateways:
     - profile: main
@@ -83,3 +107,4 @@ config:
         - config set approvals.exec.enabled true
         - config set approvals.exec.mode targets
         - config set approvals.exec.targets "[{\"channel\":\"telegram\",\"to\":\"$TELEGRAM_USER_ID\"}]"
+        - config set agents.defaults.model.primary "openrouter/moonshotai/kimi-k2.5"
