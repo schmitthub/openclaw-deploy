@@ -420,6 +420,22 @@ describe("HostBootstrap component", () => {
     const dockerHost = await promiseOf(bootstrap.dockerHost);
     expect(dockerHost).toBe("ssh://root@1.2.3.4");
   });
+
+  it("creates successfully with autoUpdate enabled", async () => {
+    const { HostBootstrap } = await import("../components/bootstrap");
+    const bootstrap = new HostBootstrap("test-bootstrap-autoupdate", {
+      connection: { host: "1.2.3.4", user: "root" },
+      autoUpdate: true,
+    });
+
+    expect(bootstrap).toBeDefined();
+
+    const dockerReady = await promiseOf(bootstrap.dockerReady);
+    expect(dockerReady).toBe("ready");
+
+    const dockerHost = await promiseOf(bootstrap.dockerHost);
+    expect(dockerHost).toMatch(/^ssh:\/\/root@/);
+  });
 });
 
 describe("EnvoyEgress component MITM validation", () => {

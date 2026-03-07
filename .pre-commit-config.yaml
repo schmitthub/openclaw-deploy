@@ -8,6 +8,7 @@ repos:
       - id: check-yaml
       - id: check-merge-conflict
       - id: detect-private-key
+        exclude: ^tests/
 
   # Prettier — format TS/JS/JSON/YAML/MD (reads .prettierrc + .prettierignore)
   - repo: local

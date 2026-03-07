@@ -312,10 +312,6 @@ Each gateway gets an `ocdeploy/AGENTS.md` file in the workspace (`/home/node/.op
 
 The prompt is rendered by `renderAgentPrompt()` in `templates/agent-prompt.ts`.
 
-## Future Steps
-
-- Add CI validation via pre-commit hooks.
-
 ## Out of Scope (Unless Explicitly Requested)
 
 - Adding unrelated tooling or frameworks.

@@ -52,6 +52,49 @@ export interface HetznerConfig {
   backups?: boolean; // automatic daily backups (+20% server cost)
 }
 
+const VALID_HETZNER_KEYS = new Set<string>(["backups"]);
+
+/**
+ * Validate a raw hetzner config value from Pulumi config.
+ * Returns { config } on success or { errors, warnings } on failure.
+ */
+export function validateHetznerConfig(
+  raw: unknown,
+  provider: string,
+): { config: HetznerConfig; warnings: string[] } {
+  const warnings: string[] = [];
+
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    const got = Array.isArray(raw)
+      ? "an array"
+      : raw === null
+        ? "null"
+        : typeof raw;
+    throw new Error(
+      `Invalid "hetzner" config: expected an object (e.g. { backups: true }), got ${got}. ` +
+        `Check your Pulumi.<stack>.yaml formatting.`,
+    );
+  }
+
+  const unknownKeys = Object.keys(raw).filter(
+    (k) => !VALID_HETZNER_KEYS.has(k),
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `Unknown key(s) in "hetzner" config: ${unknownKeys.join(", ")}. ` +
+        `Valid keys: ${[...VALID_HETZNER_KEYS].join(", ")}.`,
+    );
+  }
+
+  if (provider !== "hetzner") {
+    warnings.push(
+      `"hetzner" config is set but provider is "${provider}". Hetzner-specific options will be ignored.`,
+    );
+  }
+
+  return { config: raw as HetznerConfig, warnings };
+}
+
 // Full stack configuration
 export interface StackConfig {
   // VPS

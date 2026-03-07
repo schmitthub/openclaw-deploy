@@ -16,6 +16,7 @@ import {
   ENVOY_UID,
   TAILSCALE_HEALTH_PORT,
 } from "../config/defaults";
+import { validateHetznerConfig } from "../config/types";
 import type { EgressRule } from "../config/types";
 
 describe("domain registry", () => {
@@ -195,5 +196,64 @@ describe("defaults", () => {
 
   it("has TAILSCALE_HEALTH_PORT constant", () => {
     expect(TAILSCALE_HEALTH_PORT).toBe(9002);
+  });
+});
+
+describe("validateHetznerConfig", () => {
+  it("accepts valid config with backups", () => {
+    const { config, warnings } = validateHetznerConfig(
+      { backups: true },
+      "hetzner",
+    );
+    expect(config).toEqual({ backups: true });
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("accepts empty object", () => {
+    const { config, warnings } = validateHetznerConfig({}, "hetzner");
+    expect(config).toEqual({});
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("throws on array input", () => {
+    expect(() => validateHetznerConfig(["backups"], "hetzner")).toThrow(
+      /got an array/,
+    );
+  });
+
+  it("throws on null input", () => {
+    expect(() => validateHetznerConfig(null, "hetzner")).toThrow(/got null/);
+  });
+
+  it("throws on string input", () => {
+    expect(() => validateHetznerConfig("backups", "hetzner")).toThrow(
+      /got string/,
+    );
+  });
+
+  it("throws on unknown keys", () => {
+    expect(() =>
+      validateHetznerConfig({ backups: true, snapshots: true }, "hetzner"),
+    ).toThrow(/Unknown key.*snapshots/);
+  });
+
+  it("lists valid keys in unknown-key error", () => {
+    expect(() => validateHetznerConfig({ bad: true }, "hetzner")).toThrow(
+      /Valid keys: backups/,
+    );
+  });
+
+  it("warns when provider is not hetzner", () => {
+    const { warnings } = validateHetznerConfig(
+      { backups: true },
+      "digitalocean",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"digitalocean"');
+  });
+
+  it("does not warn when provider is hetzner", () => {
+    const { warnings } = validateHetznerConfig({ backups: true }, "hetzner");
+    expect(warnings).toHaveLength(0);
   });
 });

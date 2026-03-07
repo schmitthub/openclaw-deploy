@@ -172,9 +172,9 @@ rules:
         - "**/templates/entrypoint.ts"
     message: >-
       Entrypoint executes as the node user without `gosu` privilege drop.
-      Without gosu, the process inherits root's UID, which bypasses
-      iptables owner-match rules (uid 0 is excluded from REDIRECT) and
-      grants full CAP_NET_ADMIN access within the shared network namespace.
+      Without gosu, the process inherits root's UID, which bypasses the
+      sidecar's iptables owner-match RETURN rules (uid 0 is excluded from
+      REDIRECT) and allows unrestricted egress outside the Envoy proxy.
     languages: [ts]
     severity: ERROR
     metadata:

@@ -1,8 +1,8 @@
 config:
-  openclaw-deploy:autoUpdate: "true"
+  openclaw-deploy:autoUpdate: true
   openclaw-deploy:hetzner:
     backups: true
-  openclaw-deploy:dockerhubPush: "true"
+  openclaw-deploy:dockerhubPush: true
   openclaw-deploy:provider: hetzner
   openclaw-deploy:serverType: cx23
   openclaw-deploy:region: nbg1

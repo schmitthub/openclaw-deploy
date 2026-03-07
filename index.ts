@@ -12,11 +12,12 @@ import {
   GatewayInit,
   Gateway,
 } from "./components";
-import type {
-  EgressRule,
-  GatewayConfig,
-  HetznerConfig,
-  VpsProvider,
+import {
+  validateHetznerConfig,
+  type EgressRule,
+  type GatewayConfig,
+  type HetznerConfig,
+  type VpsProvider,
 } from "./config/types";
 import { PROVIDERS } from "./config/defaults";
 import { renderAgentPrompt } from "./templates";
@@ -77,29 +78,12 @@ if (duplicates.length > 0) {
 // Server → HostBootstrap → {EnvoyEgress, GatewayImage, TailscaleSidecar} → EnvoyProxy → GatewayInit → Gateway
 
 // Provider-specific config validation
-const hetznerConfig = cfg.getObject<HetznerConfig>("hetzner");
-if (hetznerConfig !== undefined) {
-  if (typeof hetznerConfig !== "object" || hetznerConfig === null) {
-    throw new Error(
-      `Invalid "hetzner" config: expected an object (e.g. { backups: true }), got ${hetznerConfig === null ? "null" : typeof hetznerConfig}. ` +
-        `Check your Pulumi.<stack>.yaml formatting.`,
-    );
-  }
-  const validHetznerKeys = new Set(["backups"]);
-  const unknownKeys = Object.keys(hetznerConfig).filter(
-    (k) => !validHetznerKeys.has(k),
-  );
-  if (unknownKeys.length > 0) {
-    throw new Error(
-      `Unknown key(s) in "hetzner" config: ${unknownKeys.join(", ")}. ` +
-        `Valid keys: ${[...validHetznerKeys].join(", ")}.`,
-    );
-  }
-  if (provider !== "hetzner") {
-    pulumi.log.warn(
-      `"hetzner" config is set but provider is "${provider}". Hetzner-specific options will be ignored.`,
-    );
-  }
+const rawHetznerConfig = cfg.getObject<HetznerConfig>("hetzner");
+let hetznerConfig: HetznerConfig | undefined;
+if (rawHetznerConfig !== undefined) {
+  const result = validateHetznerConfig(rawHetznerConfig, provider);
+  for (const w of result.warnings) pulumi.log.warn(w);
+  hetznerConfig = provider === "hetzner" ? result.config : undefined;
 }
 
 // 1. Provision VPS

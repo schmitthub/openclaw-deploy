@@ -64,7 +64,7 @@ export class HostBootstrap extends pulumi.ComponentResource {
     const ACCEPT_ENV_CMD = [
       "mkdir -p /etc/ssh/sshd_config.d",
       "echo 'AcceptEnv *' > /etc/ssh/sshd_config.d/99-accept-env.conf",
-      "(systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || kill -HUP $(cat /var/run/sshd.pid 2>/dev/null) 2>/dev/null || true)",
+      "(systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || kill -HUP $(cat /var/run/sshd.pid 2>/dev/null) 2>/dev/null || echo 'WARNING: sshd reload failed — AcceptEnv may not take effect until next restart' >&2)",
     ].join(" && ");
     const configureAcceptEnv = new command.remote.Command(
       `${name}-accept-env`,
