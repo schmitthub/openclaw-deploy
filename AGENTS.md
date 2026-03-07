@@ -127,6 +127,7 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 | `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                |
 | `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                  |
 | `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                           |
+| `dockerhubPush`              | boolean                                       | no       | Build locally + push to Docker Hub (default: false)        |
 | `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)            |
 | `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` — env vars for init + runtime       |
 
@@ -135,7 +136,9 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 - Each Pulumi stack deploys **one server** with **N gateway instances**.
 - Each gateway instance is composed of **5 Pulumi components** in a pipeline (see Component Hierarchy).
 - Envoy is the sole egress proxy — all TCP egress routes through it via iptables REDIRECT.
-- **Image builds** use `@pulumi/docker-build` (BuildKit). Templates are rendered locally at plan time, written to a temp dir, and BuildKit transfers the build context to the remote Docker daemon via `DOCKER_HOST=ssh://`. No base64 file uploads for image builds.
+- **Image builds** have two modes controlled by `dockerhubPush` stack config:
+  - **`dockerhubPush: true`**: Build locally, push to Docker Hub, pull on VPS via `docker.RemoteImage`. Requires `DOCKER_REGISTRY_REPO`, `DOCKER_REGISTRY_USER`, `DOCKER_REGISTRY_PASS` env vars. Build cache stays local.
+  - **`dockerhubPush: false` (default)**: Build on VPS via `@pulumi/docker-build` (BuildKit) with `DOCKER_HOST=ssh://`. Known limitation: the provider creates an unmanaged BuildKit container whose cache accumulates on disk ([pulumi/pulumi-docker-build#65](https://github.com/pulumi/pulumi-docker-build/issues/65)). Manual cleanup required — see warning emitted during `pulumi up`.
 - **Tailscale sidecar model**: Each gateway has a dedicated Tailscale sidecar container (`tailscale-<profile>`) that owns the network namespace. The sidecar runs the official `containerboot` entrypoint (Tailscale's Docker image entrypoint). The gateway and envoy containers share the sidecar's netns via `network_mode: container:tailscale-<profile>`.
 - The sidecar entrypoint sets iptables REDIRECT rules, then `exec`s `containerboot` which handles Tailscale auth, state, and serve config automatically.
 - Tailscale uses kernel networking (`TS_USERSPACE=false`) with TUN device (`/dev/net/tun`). WireGuard UDP is allowed only for root (containerboot) via `iptables -m owner --uid-owner 0`. The node user (openclaw) is blocked from all UDP egress.

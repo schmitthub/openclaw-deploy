@@ -116,7 +116,7 @@ const gatewayInstances = gateways.map((gw) => {
 
   const secretEnv = cfg.getSecret(`gatewaySecretEnv-${gw.profile}`);
 
-  // Build image via BuildKit (content-aware, no manual hash hacks)
+  // Build image: Docker Hub (dockerhubPush: true) or on-VPS via SSH (default).
   const image = new GatewayImage(
     `gateway-image-${gw.profile}`,
     {
@@ -126,6 +126,7 @@ const gatewayInstances = gateways.map((gw) => {
       version: gw.version,
       installBrowser: gw.installBrowser,
       imageSteps: gw.imageSteps,
+      dockerhubPush: cfg.getBoolean("dockerhubPush"),
     },
     { dependsOn: [bootstrap] },
   );

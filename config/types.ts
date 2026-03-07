@@ -61,6 +61,9 @@ export interface StackConfig {
   // Egress
   egressPolicy: EgressRule[];
 
+  // Build
+  dockerhubPush?: boolean; // build locally + push to Docker Hub (default: false)
+
   // Gateways (1+)
   gateways: [GatewayConfig, ...GatewayConfig[]];
 }

@@ -25,6 +25,7 @@ config:
       port: 18789
       setupCommands:
         - 'onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"'
+  # openclaw-deploy:dockerhubPush: true  # Optional: build locally + push to Docker Hub
   openclaw-deploy:gatewayToken-dev:
     secure: <encrypted>
 ```
@@ -34,6 +35,7 @@ config:
 const cfg = new pulumi.Config();
 cfg.require("provider");           // plain string, fails if missing
 cfg.get("sshKeyId");               // optional string (auto-generates SSH key if omitted)
+cfg.getBoolean("dockerhubPush");   // optional boolean (default: false)
 cfg.requireSecret("tailscaleAuthKey"); // secret string
 cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 ```

@@ -2,6 +2,7 @@ config:
   openclaw-deploy:provider: hetzner
   openclaw-deploy:serverType: cx23
   openclaw-deploy:region: nbg1
+  # openclaw-deploy:dockerhubPush: true  # Build locally + push to Docker Hub (requires DOCKER_REGISTRY_REPO, DOCKER_REGISTRY_USER, DOCKER_REGISTRY_PASS env vars)
   openclaw-deploy:egressPolicy:
     - action: allow
       dst: pythonhosted.org

@@ -24,6 +24,7 @@ What this gets you above the official sandboxed docker compose offering:
   - [Table of Contents](#table-of-contents)
   - [Try it: Deploy OpenClaw with Telegram and Private Discord server access](#try-it-deploy-openclaw-with-telegram-and-private-discord-server-access)
     - [1) Create your `.env` file](#1-create-your-env-file)
+    - [0) Optional Dockerhub Setup (Recommended)](#0-optional-dockerhub-setup-recommended)
     - [2) Register accounts and create API credentials](#2-register-accounts-and-create-api-credentials)
       - [OpenRouter](#openrouter)
       - [Tailscale](#tailscale)
@@ -46,6 +47,7 @@ What this gets you above the official sandboxed docker compose offering:
   - [Firewall Bypass (SOCKS Proxy)](#firewall-bypass-socks-proxy)
   - [DNS Exfiltration Prevention](#dns-exfiltration-prevention)
   - [Agent Environment Prompt](#agent-environment-prompt)
+  - [Docker Hub Build Mode](#docker-hub-build-mode)
   - [Experimental Runtime Binary Persistence](#experimental-runtime-binary-persistence)
 
 ## Try it: Deploy OpenClaw with Telegram and Private Discord server access
@@ -84,7 +86,22 @@ OCI_USER_ID=
 HCLOUD_TOKEN=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_USER_ID=
+# Optional if using `dockerhubPush: true` in your Pulumi stack config
+DOCKER_REGISTRY_REPO=
+DOCKER_REGISTRY_USER=
+DOCKER_REGISTRY_PASS=
 ```
+
+### 0) Optional Dockerhub Setup (Recommended)
+
+I highly recommend using Docker Hub to push your image to. It makes deployments siginficantly faster over having to build the image on a smaller VPS frequently, and it avoids ugly cache cleanup that builds up on your server and eats away at your disk space.
+
+- Create an account on <https://hub.docker.com/>
+- In your "My Hub" page Create a Repository, for example "openclaw"
+- Set it to private, but public should be okay too it'll just contain your customizations but shouldn't have any secrets in it by default, but do at your own risk.
+- If you chose private: click your profile icon in the top right, go to "Account Settings" > "Personal access tokens" > "Generate new token" with Read,Write,Delete permissions.
+
+Save the repository name (ex: `yourusername/openclaw`), your Docker Hub username, and the generated token to your `.env` file as `DOCKER_REGISTRY_REPO`, `DOCKER_REGISTRY_USER`, and `DOCKER_REGISTRY_PASS` respectively.
 
 ### 2) Register accounts and create API credentials
 
@@ -386,17 +403,18 @@ pulumi up
 
 Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for a complete example.
 
-| Key                          | Type                                          | Required | Description                                        |
-| ---------------------------- | --------------------------------------------- | -------- | -------------------------------------------------- |
-| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                       |
-| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                 |
-| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                    |
-| `sshKeyId`                   | string                                        | no       | SSH key ID at provider (auto-generated if omitted) |
-| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                        |
-| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)          |
-| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                   |
-| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)    |
-| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` env vars for init + runtime |
+| Key                          | Type                                          | Required | Description                                             |
+| ---------------------------- | --------------------------------------------- | -------- | ------------------------------------------------------- |
+| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                            |
+| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                      |
+| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                         |
+| `sshKeyId`                   | string                                        | no       | SSH key ID at provider (auto-generated if omitted)      |
+| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                             |
+| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)               |
+| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                        |
+| `dockerhubPush`              | boolean                                       | no       | Build locally and push to Docker Hub (default: `false`) |
+| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)         |
+| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` env vars for init + runtime      |
 
 **Gateway profile fields:**
 
@@ -521,6 +539,32 @@ The prompt teaches the agent three things it can't figure out on its own:
 3. **The firewall blocks almost everything.** Instead of failing silently or retrying network requests in a loop, it knows to either ask you to add a permanent whitelist entry (for recurring services) or ask you to open the SOCKS tunnel (for one-off downloads). It also knows to have its exact command ready before asking you to open the tunnel since the default window is only 30 seconds.
 
 The file is root-owned and read-only (chmod 444) so the agent can't modify or delete it. It is re-deployed when the template content changes (Pulumi trigger on content hash).
+
+## Docker Hub Build Mode
+
+By default, gateway images are built directly on the VPS via `DOCKER_HOST=ssh://`. This works but has a known limitation: the `@pulumi/docker-build` provider creates an unmanaged BuildKit container on the VPS whose build cache accumulates over time and cannot be pruned via the Docker CLI ([pulumi/pulumi-docker-build#65](https://github.com/pulumi/pulumi-docker-build/issues/65)).
+
+To avoid this, set `dockerhubPush: true` in your stack config. This builds images locally and pushes them to a private Docker Hub registry, then pulls them on the VPS. Build cache stays on your local machine where it's trivially manageable.
+
+```yaml
+openclaw-deploy:dockerhubPush: true
+```
+
+**Required environment variables** (when `dockerhubPush: true`):
+
+| Variable               | Description                                                |
+| ---------------------- | ---------------------------------------------------------- |
+| `DOCKER_REGISTRY_REPO` | Docker Hub image repository (e.g. `yourusername/openclaw`) |
+| `DOCKER_REGISTRY_USER` | Docker Hub username                                        |
+| `DOCKER_REGISTRY_PASS` | Docker Hub access token                                    |
+
+**If using the default SSH build mode** (`dockerhubPush: false`), build cache will accumulate on the VPS. To reclaim disk space, SSH into the VPS and run:
+
+```bash
+docker ps --filter name=buildx_buildkit -q \
+  | xargs -r -I{} docker exec {} buildctl prune --keep-storage=2GB
+docker image prune -f
+```
 
 ## Experimental Runtime Binary Persistence
 
