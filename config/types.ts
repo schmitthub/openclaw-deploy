@@ -117,6 +117,7 @@ export interface StackConfig {
 
   // Build
   dockerhubPush?: boolean; // build locally + push to Docker Hub (default: false)
+  multiPlatform?: boolean; // build for amd64 + arm64 when dockerhubPush is true (default: false)
 
   // Gateways (1+)
   gateways: [GatewayConfig, ...GatewayConfig[]];

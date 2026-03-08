@@ -202,7 +202,9 @@ describe("renderDockerfile", () => {
 
   it("uses multi-stage build with downloads stage", () => {
     const df = renderDockerfile(defaultOpts);
-    expect(df).toContain("FROM debian:bookworm-slim AS downloads");
+    expect(df).toMatch(
+      /FROM debian:bookworm-slim@sha256:[a-f0-9]{64} AS downloads/,
+    );
     expect(df).toContain("COPY --from=downloads /usr/local/bin/coredns");
     expect(df).toContain("COPY --from=downloads /usr/local/bin/bun");
   });

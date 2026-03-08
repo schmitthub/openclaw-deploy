@@ -128,6 +128,7 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 | `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                             |
 | `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                      |
 | `dockerhubPush`              | boolean                                       | no       | Build locally + push to Docker Hub (default: false)                   |
+| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: false) |
 | `autoUpdate`                 | boolean                                       | no       | Automatic security updates via `unattended-upgrades` (default: false) |
 | `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (`{ backups?: boolean }`)                    |
 | `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                       |
@@ -139,7 +140,7 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 - Each gateway instance is composed of **5 Pulumi components** in a pipeline (see Component Hierarchy).
 - Envoy is the sole egress proxy — all TCP egress routes through it via iptables REDIRECT.
 - **Image builds** have two modes controlled by `dockerhubPush` stack config:
-  - **`dockerhubPush: true`**: Build locally, push to Docker Hub, pull on VPS via `docker.RemoteImage`. Requires `DOCKER_REGISTRY_REPO`, `DOCKER_REGISTRY_USER`, `DOCKER_REGISTRY_PASS` env vars. Build cache stays local.
+  - **`dockerhubPush: true`**: Build locally, push to Docker Hub, pull on VPS via `docker.RemoteImage`. Requires `DOCKER_REGISTRY_REPO`, `DOCKER_REGISTRY_USER`, `DOCKER_REGISTRY_PASS` env vars. Uses registry-backed build cache (`cacheFrom`/`cacheTo` with inline cache metadata) so subsequent builds only rebuild changed layers. By default builds for the host architecture only. Set `multiPlatform: true` to build for both `linux/amd64` and `linux/arm64` — required when deploying to both amd64 (`cx` series) and arm64 (`cax` series) VPS types. First multi-platform build is slow (~30min due to QEMU cross-compilation); subsequent builds use registry cache.
   - **`dockerhubPush: false` (default)**: Build on VPS via `@pulumi/docker-build` (BuildKit) with `DOCKER_HOST=ssh://`. Known limitation: the provider creates an unmanaged BuildKit container whose cache accumulates on disk ([pulumi/pulumi-docker-build#65](https://github.com/pulumi/pulumi-docker-build/issues/65)). Manual cleanup required — see warning emitted during `pulumi up`.
 - **Tailscale sidecar model**: Each gateway has a dedicated Tailscale sidecar container (`tailscale-<profile>`) that owns the network namespace. The sidecar runs the official `containerboot` entrypoint (Tailscale's Docker image entrypoint). The gateway and envoy containers share the sidecar's netns via `network_mode: container:tailscale-<profile>`.
 - The sidecar entrypoint sets iptables REDIRECT rules, then `exec`s `containerboot` which handles Tailscale auth, state, and serve config automatically.
@@ -166,6 +167,8 @@ Before considering work complete, agents should:
 
 ## Contribution Guidelines for Agents
 
+- **Research before changing infrastructure or build configuration.** Before modifying Docker builds, Pulumi resources, network config, or any infrastructure-affecting code: read the relevant provider/tool documentation, understand the full implications (caching, performance, cross-platform behavior, state management), and verify your approach handles all supported deployment targets (amd64 + arm64, all VPS providers). A one-line change to a build resource can break caching, double build times, or cause architecture-specific failures. Do not treat infrastructure changes as trivial — always think through second-order effects.
+- **Never propose removing or scoping down a feature to work around a problem you introduced.** If a change causes issues, fix the change — don't ask the user if they "really need" the feature. The feature was there for a reason.
 - Pin versions where stability matters; document why when pinning is non-obvious.
 - Avoid introducing unnecessary runtime dependencies.
 - Templates are **pure functions** returning strings — no side effects, no I/O.

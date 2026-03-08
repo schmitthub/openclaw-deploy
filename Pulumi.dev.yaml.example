@@ -78,7 +78,7 @@ config:
       proto: tls
   openclaw-deploy:gateways:
     - profile: main
-      version: latest
+      version: 2026.3.7
       port: 18789
       installBrowser: true
       setupCommands:

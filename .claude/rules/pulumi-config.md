@@ -26,6 +26,7 @@ config:
       setupCommands:
         - 'onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"'
   # openclaw-deploy:dockerhubPush: true  # Optional: build locally + push to Docker Hub
+  # openclaw-deploy:multiPlatform: true  # Optional: build amd64 + arm64 (requires dockerhubPush, first build ~30min)
   # openclaw-deploy:autoUpdate: true  # Optional: automatic security updates via unattended-upgrades
   # openclaw-deploy:hetzner:  # Optional: Hetzner-specific options
   #   backups: true  # automatic daily backups (+20% server cost)
@@ -39,6 +40,7 @@ const cfg = new pulumi.Config();
 cfg.require("provider");           // plain string, fails if missing
 cfg.get("sshKeyId");               // optional string (auto-generates SSH key if omitted)
 cfg.getBoolean("dockerhubPush");   // optional boolean (default: false)
+cfg.getBoolean("multiPlatform");   // optional boolean (default: false, only with dockerhubPush)
 cfg.getBoolean("autoUpdate");      // optional boolean (default: false)
 cfg.getObject<HetznerConfig>("hetzner"); // optional provider-specific config (validated at runtime)
 cfg.requireSecret("tailscaleAuthKey"); // secret string
@@ -63,7 +65,7 @@ Components accept typed args interfaces (5 per gateway, plus shared infra):
 - `ServerArgs`: provider, serverType, region?, sshKeyId?, image?, hetzner?, compartmentId?, subnetId?, ocpus?, memoryInGbs?
 - `HostBootstrapArgs`: connection, autoUpdate?
 - `EnvoyEgressArgs`: connection, egressPolicy
-- `GatewayImageArgs`: connection, dockerHost, profile, version, installBrowser?, imageSteps?, dockerhubPush?
+- `GatewayImageArgs`: connection, dockerHost, profile, version, installBrowser?, imageSteps?, dockerhubPush?, multiPlatform?
 - `TailscaleSidecarArgs`: connection, dockerHost, profile, port, tailscaleAuthKey, tcpPortMappings?
 - `EnvoyProxyArgs`: connection, dockerHost, sidecarContainerName, envoyConfigPath, envoyConfigHash, inspectedDomains, profile
 - `GatewayInitArgs`: connection, profile, imageName, setupCommands?, secretEnv?, gatewayToken, tailscaleHostname

@@ -1,6 +1,8 @@
 import {
   CORE_APT_PACKAGES,
   DOCKER_BASE_IMAGE,
+  DOCKER_BASE_IMAGE_DIGEST,
+  DOCKER_DOWNLOADS_IMAGE,
   DEFAULT_OPENCLAW_CONFIG_DIR,
   DEFAULT_OPENCLAW_WORKSPACE_DIR,
   DEFAULT_GATEWAY_PORT,
@@ -31,7 +33,7 @@ export function renderDockerfile(opts: DockerfileOpts): string {
 #
 
 # ── Stage: download static binaries (parallel, cached independently) ──────────
-FROM debian:bookworm-slim AS downloads
+FROM ${DOCKER_DOWNLOADS_IMAGE} AS downloads
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates unzip && \\
     rm -rf /var/lib/apt/lists/*
@@ -167,6 +169,9 @@ ENV NODE_COMPILE_CACHE=${NODE_COMPILE_CACHE_DIR}
 # Gateway binds to loopback — Tailscale Serve handles external access.
 ENV OPENCLAW_BRIDGE_PORT=18790
 ENV OPENCLAW_GATEWAY_BIND=loopback
+
+LABEL org.opencontainers.image.base.name="${DOCKER_BASE_IMAGE}" \\
+      org.opencontainers.image.base.digest="${DOCKER_BASE_IMAGE_DIGEST}"
 
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["openclaw", "gateway", "run", "--port", "${gatewayPort}"]

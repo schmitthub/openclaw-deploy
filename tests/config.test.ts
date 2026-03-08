@@ -182,8 +182,8 @@ describe("defaults", () => {
     expect(CORE_APT_PACKAGES).toContain("libsecret-tools");
   });
 
-  it("uses node:22-bookworm base image", () => {
-    expect(DOCKER_BASE_IMAGE).toBe("node:22-bookworm");
+  it("uses digest-pinned node:22-bookworm base image", () => {
+    expect(DOCKER_BASE_IMAGE).toMatch(/^node:22-bookworm@sha256:[a-f0-9]{64}$/);
   });
 
   it("has SSHD_PORT constant", () => {

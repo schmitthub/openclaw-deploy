@@ -46,6 +46,8 @@ export interface GatewayImageArgs {
   imageSteps?: ImageStep[];
   /** Push to Docker Hub instead of building on VPS. Uses DOCKER_REGISTRY_REPO for image tag prefix; auth via DOCKER_REGISTRY_USER + DOCKER_REGISTRY_PASS. */
   dockerhubPush?: boolean;
+  /** Build for both linux/amd64 and linux/arm64 (only applies when dockerhubPush is true). First build is slow (~30min) due to cross-compilation; subsequent builds use registry cache. Default: false (builds for host architecture only). */
+  multiPlatform?: boolean;
 }
 
 export class GatewayImage extends pulumi.ComponentResource {
@@ -122,16 +124,25 @@ export class GatewayImage extends pulumi.ComponentResource {
       throw new Error(`Invalid characters in Docker tag: ${commitTag}`);
     }
 
-    // Build locally and push to Docker Hub (stable version tag only — commit tag applied separately)
+    // Multi-platform builds produce a manifest list that works on any VPS architecture (amd64 + arm64).
+    // Default is single-platform (host arch only) — fast but only works on matching VPS types.
+    // Multi-platform first build is slow (~30min) due to QEMU cross-compilation; subsequent builds
+    // use registry cache (cacheFrom/cacheTo). load: false is required for multi-platform.
+    const platforms = args.multiPlatform
+      ? [docker_build.Platform.Linux_amd64, docker_build.Platform.Linux_arm64]
+      : undefined;
+
     const image = new docker_build.Image(
       `${name}-image`,
       {
         tags: [remoteTag],
         dockerfile: { location: path.join(tempDir, "Dockerfile") },
         context: { location: tempDir },
+        ...(platforms ? { platforms, load: false } : { load: false }),
         push: true,
-        load: false,
         buildOnPreview: false,
+        cacheFrom: [{ registry: { ref: remoteTag } }],
+        cacheTo: [{ inline: {} }],
         registries: [
           {
             address: "docker.io",
@@ -162,8 +173,12 @@ export class GatewayImage extends pulumi.ComponentResource {
 
     // Pull by stable version tag — re-pull gated by digest (content change).
     // Use docker.io/ prefix so the provider matches registryAuth address.
+    // Only skip the prefix if the registry portion (before first /) contains a dot
+    // (e.g. "ghcr.io/user/repo:tag"). Dots in the tag portion (e.g. ":2026.3.7")
+    // must not suppress the prefix.
+    const registryPart = remoteTag.split("/")[0];
     const pullTag =
-      remoteTag.includes("/") && !remoteTag.includes(".")
+      remoteTag.includes("/") && !registryPart.includes(".")
         ? `docker.io/${remoteTag}`
         : remoteTag;
     const pulled = new docker.RemoteImage(

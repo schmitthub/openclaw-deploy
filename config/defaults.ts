@@ -1,5 +1,6 @@
-// Envoy
-export const ENVOY_IMAGE = "envoyproxy/envoy:v1.33-latest";
+// Envoy (digest-pinned — update via `make update-digests`)
+export const ENVOY_IMAGE =
+  "envoyproxy/envoy:v1.33-latest@sha256:f91c972d5c99bc133233a079b5663b903e7d56b3b0b0216398924f7b80d09e47";
 export const ENVOY_EGRESS_PORT = 10000;
 export const ENVOY_TCP_PORT_BASE = 10001;
 export const ENVOY_UID = 101;
@@ -24,7 +25,14 @@ export const COREDNS_CONTAINER_PATH = "/etc/coredns/Corefile";
 export const DEFAULT_GATEWAY_PORT = 18789;
 export const DEFAULT_OPENCLAW_CONFIG_DIR = "/home/node/.openclaw";
 export const DEFAULT_OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
-export const DOCKER_BASE_IMAGE = "node:22-bookworm";
+
+// Base images (digest-pinned — update via `make update-digests`)
+export const DOCKER_BASE_IMAGE =
+  "node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9";
+export const DOCKER_BASE_IMAGE_DIGEST =
+  "sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9";
+export const DOCKER_DOWNLOADS_IMAGE =
+  "debian:bookworm-slim@sha256:74d56e3931e0d5a1dd51f8c8a2466d21de84a271cd3b5a733b803aa91abf4421";
 export const NODE_COMPILE_CACHE_DIR = "/home/node/.node-compile-cache";
 
 // SSH access
@@ -53,8 +61,9 @@ export const TAILSCALE_FUNNEL_PORTS = [443, 8443, 10000];
 // Supported VPS providers
 export const PROVIDERS = ["hetzner", "digitalocean", "oracle"] as const;
 
-// Tailscale sidecar
-export const TAILSCALE_IMAGE = "tailscale/tailscale:v1.94.2";
+// Tailscale sidecar (digest-pinned — update via `make update-digests`)
+export const TAILSCALE_IMAGE =
+  "tailscale/tailscale:v1.94.2@sha256:95e528798bebe75f39b10e74e7051cf51188ee615934f232ba7ad06a3390ffa1";
 export const TAILSCALE_STATE_DIR = "/var/lib/tailscale";
 export const TAILSCALE_HEALTH_PORT = 9002;
 

@@ -413,6 +413,7 @@ Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for 
 | `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                      |
 | `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                               |
 | `dockerhubPush`              | boolean                                       | no       | Build locally and push to Docker Hub (default: `false`)                        |
+| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: `false`)        |
 | `autoUpdate`                 | boolean                                       | no       | Enable automatic security updates via `unattended-upgrades` (default: `false`) |
 | `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (see below)                                           |
 | `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                |
@@ -558,7 +559,7 @@ The file is root-owned and read-only (chmod 444) so the agent can't modify or de
 
 By default, gateway images are built directly on the VPS via `DOCKER_HOST=ssh://`. This works but has a known limitation: the `@pulumi/docker-build` provider creates an unmanaged BuildKit container on the VPS whose build cache accumulates over time and cannot be pruned via the Docker CLI ([pulumi/pulumi-docker-build#65](https://github.com/pulumi/pulumi-docker-build/issues/65)).
 
-To avoid this, set `dockerhubPush: true` in your stack config. This builds images locally and pushes them to a private Docker Hub registry, then pulls them on the VPS. Build cache stays on your local machine where it's trivially manageable.
+To avoid this, set `dockerhubPush: true` in your stack config. This builds images locally and pushes them to a private Docker Hub registry, then pulls them on the VPS.
 
 ```yaml
 openclaw-deploy:dockerhubPush: true
@@ -571,6 +572,26 @@ openclaw-deploy:dockerhubPush: true
 | `DOCKER_REGISTRY_REPO` | Docker Hub image repository (e.g. `yourusername/openclaw`) |
 | `DOCKER_REGISTRY_USER` | Docker Hub username                                        |
 | `DOCKER_REGISTRY_PASS` | Docker Hub access token                                    |
+
+### Multi-platform builds
+
+By default, `dockerhubPush` builds for your local machine's architecture only (e.g. arm64 on Apple Silicon, amd64 on Intel). This is fast but means the image only works on VPS types matching your architecture.
+
+If you deploy to both amd64 (`cx` series on Hetzner) and arm64 (`cax` series on Hetzner, Ampere on Oracle Cloud) servers, enable multi-platform builds:
+
+```yaml
+openclaw-deploy:multiPlatform: true
+```
+
+This builds both `linux/amd64` and `linux/arm64` images and pushes a manifest list to Docker Hub. The VPS pulls the correct architecture automatically.
+
+**Trade-offs:**
+
+- **First build is slow** (~30 minutes on an M-series Mac) because the non-native architecture is cross-compiled via QEMU emulation. This is a one-time cost.
+- **Subsequent builds are fast** — registry-backed build cache (`cacheFrom`/`cacheTo`) means only changed layers are rebuilt. The cache is stored inline in the pushed image on Docker Hub.
+- **Without `multiPlatform`**, builds complete in seconds (no cross-compilation) but deploying an arm64 image to an amd64 VPS (or vice versa) will fail with `exec format error`.
+
+> **Note:** `multiPlatform` only applies when `dockerhubPush: true`. The on-VPS build mode (`dockerhubPush: false`) always builds for the server's native architecture.
 
 **If using the default SSH build mode** (`dockerhubPush: false`), build cache will accumulate on the VPS. To reclaim disk space, SSH into the VPS and run:
 
