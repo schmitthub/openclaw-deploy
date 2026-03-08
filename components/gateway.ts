@@ -14,6 +14,8 @@ export interface GatewayArgs {
   port: number;
   imageName: pulumi.Input<string>;
   sidecarContainerName: pulumi.Input<string>;
+  /** Sidecar container ID (for networkMode — avoids name-vs-ID drift) */
+  sidecarContainerId: pulumi.Input<string>;
   tailscaleHostname: pulumi.Input<string>;
   /** Host path to the Corefile (CoreDNS allowlist config) */
   corefilePath: pulumi.Input<string>;
@@ -107,7 +109,7 @@ export class Gateway extends pulumi.ComponentResource {
         image: args.imageName,
         restart: "unless-stopped",
         init: true,
-        networkMode: pulumi.interpolate`container:${args.sidecarContainerName}`,
+        networkMode: pulumi.interpolate`container:${args.sidecarContainerId}`,
         envs: computedEnvs,
         command: [
           "openclaw",

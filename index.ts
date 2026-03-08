@@ -144,6 +144,7 @@ const gatewayInstances = gateways.map((gw) => {
       installBrowser: gw.installBrowser,
       imageSteps: gw.imageSteps,
       dockerhubPush: cfg.getBoolean("dockerhubPush"),
+      multiPlatform: cfg.getBoolean("multiPlatform"),
     },
     { dependsOn: [bootstrap] },
   );
@@ -169,6 +170,7 @@ const gatewayInstances = gateways.map((gw) => {
       connection: server.connection,
       dockerHost: bootstrap.dockerHost,
       sidecarContainerName: sidecar.containerName,
+      sidecarContainerId: sidecar.containerId,
       envoyConfigPath: envoy.envoyConfigPath,
       envoyConfigHash: envoy.configHash,
       inspectedDomains: envoy.inspectedDomains,
@@ -212,6 +214,7 @@ const gatewayInstances = gateways.map((gw) => {
       port: gw.port,
       imageName: image.imageName,
       sidecarContainerName: sidecar.containerName,
+      sidecarContainerId: sidecar.containerId,
       tailscaleHostname: sidecar.tailscaleHostname,
       corefilePath: envoy.corefilePath,
       env: gw.env,

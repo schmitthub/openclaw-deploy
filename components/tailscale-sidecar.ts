@@ -35,8 +35,10 @@ export interface TailscaleSidecarArgs {
 }
 
 export class TailscaleSidecar extends pulumi.ComponentResource {
-  /** Container name, e.g. "tailscale-dev" — used for network_mode by downstream containers */
+  /** Container name, e.g. "tailscale-dev" */
   public readonly containerName: string;
+  /** Container ID — use for networkMode to avoid name-vs-ID convergence drift */
+  public readonly containerId: pulumi.Output<string>;
   /** Tailscale hostname resolved after authentication, e.g. "openclaw.tail1234.ts.net" */
   public readonly tailscaleHostname: pulumi.Output<string>;
   /** Bridge network name, e.g. "openclaw-net-dev" */
@@ -212,10 +214,12 @@ export class TailscaleSidecar extends pulumi.ComponentResource {
       { parent: this, dependsOn: [sidecarContainer] },
     );
 
+    this.containerId = sidecarContainer.id;
     this.tailscaleHostname = sidecarHealthy.stdout.apply((s) => s.trim());
 
     this.registerOutputs({
       containerName: this.containerName,
+      containerId: this.containerId,
       tailscaleHostname: this.tailscaleHostname,
       networkName: this.networkName,
     });
