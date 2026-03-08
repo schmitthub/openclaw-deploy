@@ -14,8 +14,10 @@ export interface EnvoyProxyArgs {
   connection: pulumi.Input<command.types.input.remote.ConnectionArgs>;
   /** Docker host URI, e.g. "ssh://root@<ip>" */
   dockerHost: pulumi.Input<string>;
-  /** Sidecar container name for network_mode */
+  /** Sidecar container name (for resource naming) */
   sidecarContainerName: pulumi.Input<string>;
+  /** Sidecar container ID (for networkMode — avoids name-vs-ID drift) */
+  sidecarContainerId: pulumi.Input<string>;
   /** Host path to the envoy.yaml config file (from EnvoyEgress) */
   envoyConfigPath: pulumi.Input<string>;
   /** SHA256 hash of envoy.yaml (triggers container replacement on config change) */
@@ -74,7 +76,7 @@ export class EnvoyProxy extends pulumi.ComponentResource {
         name: envoyName,
         image: ENVOY_IMAGE,
         restart: "unless-stopped",
-        networkMode: pulumi.interpolate`container:${args.sidecarContainerName}`,
+        networkMode: pulumi.interpolate`container:${args.sidecarContainerId}`,
         envs: [`ENVOY_UID=${ENVOY_UID}`],
         healthcheck: {
           tests: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/10000"],
