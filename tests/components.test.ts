@@ -819,6 +819,10 @@ describe("GatewayImage component", () => {
 
     const imageName = await promiseOf(img.imageName);
     expect(imageName).toBe("openclaw-gateway-dev:latest");
+
+    const imageDigest = await promiseOf(img.imageDigest);
+    expect(imageDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(imageDigest).not.toBe("sha256:mockdigest1234567890abcdef");
   });
 
   it("constructs with imageSteps without errors", async () => {
@@ -836,5 +840,41 @@ describe("GatewayImage component", () => {
 
     const imageName = await promiseOf(img.imageName);
     expect(imageName).toBe("openclaw-gateway-stepstest:latest");
+  });
+
+  it("adds docker.io prefix for Docker Hub repos without explicit registry", async () => {
+    const { GatewayImage } = await import("../components/gateway-image");
+    process.env.DOCKER_REGISTRY_REPO = "myuser/openclaw";
+    process.env.DOCKER_REGISTRY_USER = "myuser";
+    process.env.DOCKER_REGISTRY_PASS = "token";
+
+    const img = new GatewayImage("test-img-dockerhub", {
+      connection: { host: "100.64.0.1", user: "root" },
+      dockerHost: "ssh://root@100.64.0.1",
+      profile: "dev",
+      version: "latest",
+      dockerhubPush: true,
+    });
+
+    const imageName = await promiseOf(img.imageName);
+    expect(imageName).toBe("docker.io/myuser/openclaw:dev-latest");
+  });
+
+  it("keeps localhost registries unprefixed in dockerhubPush mode", async () => {
+    const { GatewayImage } = await import("../components/gateway-image");
+    process.env.DOCKER_REGISTRY_REPO = "localhost:5000/openclaw";
+    process.env.DOCKER_REGISTRY_USER = "myuser";
+    process.env.DOCKER_REGISTRY_PASS = "token";
+
+    const img = new GatewayImage("test-img-localhost", {
+      connection: { host: "100.64.0.1", user: "root" },
+      dockerHost: "ssh://root@100.64.0.1",
+      profile: "dev",
+      version: "latest",
+      dockerhubPush: true,
+    });
+
+    const imageName = await promiseOf(img.imageName);
+    expect(imageName).toBe("localhost:5000/openclaw:dev-latest");
   });
 });

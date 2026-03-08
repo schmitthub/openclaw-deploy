@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Updates digest-pinned base images in config/defaults.ts.
-# Fetches current multi-arch manifest digests via `docker manifest inspect`
+# Fetches current multi-arch manifest digests via `docker buildx imagetools inspect`
 # and replaces the @sha256:... suffix in-place.
 #
 # Usage: ./scripts/update-base-digests.sh
-# Requires: docker (with manifest inspect support), jq
+# Requires: docker with buildx + imagetools support, jq
 
 DEFAULTS_FILE="config/defaults.ts"
 
@@ -54,11 +54,6 @@ for image in "${IMAGES[@]}"; do
 
   # Replace unpinned reference: "image" -> "image@sha256:new" (first pin)
   sed -i'' -e "s|\"${escaped_image}\"|\"${image}@${digest}\"|g" "$DEFAULTS_FILE"
-
-  # Update standalone DOCKER_BASE_IMAGE_DIGEST if this is the base image
-  if [ "$image" = "node:22-bookworm" ]; then
-    sed -i'' -e "s|\"sha256:[a-f0-9]*\";|\"${digest}\";|g" "$DEFAULTS_FILE"
-  fi
 done
 
 # Clean up sed backup files (macOS sed -i'' creates them)

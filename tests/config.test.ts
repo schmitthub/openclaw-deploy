@@ -12,6 +12,7 @@ import {
   CLOUDFLARE_DNS_SECONDARY,
   CORE_APT_PACKAGES,
   DOCKER_BASE_IMAGE,
+  DOCKER_BASE_IMAGE_DIGEST,
   SSHD_PORT,
   ENVOY_UID,
   TAILSCALE_HEALTH_PORT,
@@ -184,6 +185,10 @@ describe("defaults", () => {
 
   it("uses digest-pinned node:22-bookworm base image", () => {
     expect(DOCKER_BASE_IMAGE).toMatch(/^node:22-bookworm@sha256:[a-f0-9]{64}$/);
+  });
+
+  it("derives DOCKER_BASE_IMAGE_DIGEST from DOCKER_BASE_IMAGE", () => {
+    expect(DOCKER_BASE_IMAGE_DIGEST).toBe(DOCKER_BASE_IMAGE.split("@")[1]);
   });
 
   it("has SSHD_PORT constant", () => {

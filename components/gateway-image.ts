@@ -3,6 +3,7 @@ import * as command from "@pulumi/command";
 import * as docker from "@pulumi/docker";
 import * as docker_build from "@pulumi/docker-build";
 import * as child_process from "child_process";
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -53,7 +54,7 @@ export interface GatewayImageArgs {
 export class GatewayImage extends pulumi.ComponentResource {
   /** The image tag, e.g. "openclaw-gateway-dev:latest" or "registry/openclaw-gateway-dev:latest" */
   public readonly imageName: pulumi.Output<string>;
-  /** Image content digest (sha256 hash). Changes when image content changes. */
+  /** Stable image change token. Changes when build inputs change and, for pulled images, prefers the remote repo digest. */
   public readonly imageDigest: pulumi.Output<string>;
 
   constructor(
@@ -71,6 +72,11 @@ export class GatewayImage extends pulumi.ComponentResource {
     });
     const entrypoint = renderEntrypoint();
     const bypassScript = renderFirewallBypass();
+    const buildInputDigest = stableBuildInputDigest(
+      dockerfile,
+      entrypoint,
+      bypassScript,
+    );
 
     // Write build context files to a stable temp directory.
     // Using a stable path (not mkdtempSync) avoids accumulating stale dirs across runs.
@@ -82,11 +88,11 @@ export class GatewayImage extends pulumi.ComponentResource {
     writeIfChanged(path.join(tempDir, "firewall-bypass"), bypassScript, 0o700);
 
     if (args.dockerhubPush) {
-      const result = this.buildAndPush(name, args, tempDir);
+      const result = this.buildAndPush(name, args, tempDir, buildInputDigest);
       this.imageName = result.imageName;
       this.imageDigest = result.imageDigest;
     } else {
-      const result = this.buildOnHost(name, args, tempDir);
+      const result = this.buildOnHost(name, args, tempDir, buildInputDigest);
       this.imageName = result.imageName;
       this.imageDigest = result.imageDigest;
     }
@@ -102,6 +108,7 @@ export class GatewayImage extends pulumi.ComponentResource {
     name: string,
     args: GatewayImageArgs,
     tempDir: string,
+    buildInputDigest: string,
   ): { imageName: pulumi.Output<string>; imageDigest: pulumi.Output<string> } {
     const repo = process.env.DOCKER_REGISTRY_REPO;
     const username = process.env.DOCKER_REGISTRY_USER;
@@ -171,21 +178,18 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Pull by stable version tag — re-pull gated by digest (content change).
+    // Pull by stable version tag — re-pull gated by stable build inputs.
     // Use docker.io/ prefix so the provider matches registryAuth address.
-    // Only skip the prefix if the registry portion (before first /) contains a dot
-    // (e.g. "ghcr.io/user/repo:tag"). Dots in the tag portion (e.g. ":2026.3.7")
-    // must not suppress the prefix.
-    const registryPart = remoteTag.split("/")[0];
-    const pullTag =
-      remoteTag.includes("/") && !registryPart.includes(".")
-        ? `docker.io/${remoteTag}`
-        : remoteTag;
+    // Treat a first path segment as an explicit registry if it contains a dot,
+    // contains a port, or is "localhost" (Docker reference semantics).
+    const pullTag = hasExplicitRegistry(remoteTag)
+      ? remoteTag
+      : `docker.io/${remoteTag}`;
     const pulled = new docker.RemoteImage(
       `${name}-pull`,
       {
         name: pullTag,
-        pullTriggers: [image.digest],
+        pullTriggers: [buildInputDigest],
         keepLocally: true,
       },
       { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
@@ -197,7 +201,7 @@ export class GatewayImage extends pulumi.ComponentResource {
       {
         sourceImage: pullTag,
         targetImage: commitTag,
-        tagTriggers: [image.digest],
+        tagTriggers: [buildInputDigest],
       },
       { parent: this, provider: remoteDockerProvider, dependsOn: [pulled] },
     );
@@ -209,13 +213,20 @@ export class GatewayImage extends pulumi.ComponentResource {
         connection: args.connection,
         create:
           "docker image prune -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
-        triggers: [pulled.repoDigest],
+        triggers: [buildInputDigest],
       },
       { parent: this, dependsOn: [pulled] },
     );
 
-    // Return the stable version-tagged image name (digest gates downstream updates)
-    return { imageName: pulumi.output(pullTag), imageDigest: image.digest };
+    // Return the stable version-tagged image name.
+    // Prefer the pulled repo digest when available; fall back to a deterministic
+    // build-input digest so downstream container replacement is stable.
+    return {
+      imageName: pulumi.output(pullTag),
+      imageDigest: pulumi
+        .output(pulled.repoDigest)
+        .apply((repoDigest) => repoDigest || buildInputDigest),
+    };
   }
 
   /** Build on the VPS via DOCKER_HOST=ssh://. Emits a warning about BuildKit cache accumulation. */
@@ -223,6 +234,7 @@ export class GatewayImage extends pulumi.ComponentResource {
     name: string,
     args: GatewayImageArgs,
     tempDir: string,
+    buildInputDigest: string,
   ): { imageName: pulumi.Output<string>; imageDigest: pulumi.Output<string> } {
     const tag = `openclaw-gateway-${args.profile}:${args.version}`;
     const commitTag = `openclaw-gateway-${args.profile}:${GIT_SHA}`;
@@ -272,7 +284,7 @@ export class GatewayImage extends pulumi.ComponentResource {
       {
         sourceImage: tag,
         targetImage: commitTag,
-        tagTriggers: [image.digest],
+        tagTriggers: [buildInputDigest],
       },
       { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
     );
@@ -284,13 +296,34 @@ export class GatewayImage extends pulumi.ComponentResource {
         connection: args.connection,
         create:
           "docker image prune -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
-        triggers: [image.digest],
+        triggers: [buildInputDigest],
       },
       { parent: this, dependsOn: [image] },
     );
 
-    return { imageName: firstTag(image, name), imageDigest: image.digest };
+    return {
+      imageName: firstTag(image, name),
+      imageDigest: pulumi.output(buildInputDigest),
+    };
   }
+}
+
+function hasExplicitRegistry(imageRef: string): boolean {
+  const firstSegment = imageRef.split("/")[0];
+  return (
+    firstSegment.includes(".") ||
+    firstSegment.includes(":") ||
+    firstSegment === "localhost"
+  );
+}
+
+function stableBuildInputDigest(...parts: string[]): string {
+  const hash = crypto.createHash("sha256");
+  for (const part of parts) {
+    hash.update(part);
+    hash.update("\0");
+  }
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function firstTag(

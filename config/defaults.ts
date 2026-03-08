@@ -29,10 +29,9 @@ export const DEFAULT_OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
 // Base images (digest-pinned — update via `make update-digests`)
 export const DOCKER_BASE_IMAGE =
   "node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9";
-export const DOCKER_BASE_IMAGE_DIGEST =
-  "sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9";
 export const DOCKER_DOWNLOADS_IMAGE =
   "debian:bookworm-slim@sha256:74d56e3931e0d5a1dd51f8c8a2466d21de84a271cd3b5a733b803aa91abf4421";
+export const DOCKER_BASE_IMAGE_DIGEST = digestFromImageRef(DOCKER_BASE_IMAGE);
 export const NODE_COMPILE_CACHE_DIR = "/home/node/.node-compile-cache";
 
 // SSH access
@@ -85,6 +84,14 @@ export const DOMAIN_VALIDATION_RE =
  *  e.g. "*.example.com" → "_wildcard_.example.com" */
 export function safeFileDomain(domain: string): string {
   return domain.replace(/\*/g, "_wildcard_");
+}
+
+function digestFromImageRef(imageRef: string): string {
+  const at = imageRef.indexOf("@");
+  if (at === -1) {
+    throw new Error(`Image ref is not digest-pinned: ${imageRef}`);
+  }
+  return imageRef.slice(at + 1);
 }
 
 // Oracle Cloud (OCI) defaults
