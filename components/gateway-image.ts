@@ -87,6 +87,13 @@ export class GatewayImage extends pulumi.ComponentResource {
     writeIfChanged(path.join(tempDir, "entrypoint.sh"), entrypoint, 0o755);
     writeIfChanged(path.join(tempDir, "firewall-bypass"), bypassScript, 0o700);
 
+    if (args.multiPlatform && !args.dockerhubPush) {
+      throw new Error(
+        "multiPlatform: true requires dockerhubPush: true. " +
+          "On-VPS builds always use the server's native architecture.",
+      );
+    }
+
     if (args.dockerhubPush) {
       const result = this.buildAndPush(name, args, tempDir, buildInputDigest);
       this.imageName = result.imageName;
@@ -119,6 +126,11 @@ export class GatewayImage extends pulumi.ComponentResource {
         "dockerhubPush requires DOCKER_REGISTRY_REPO, DOCKER_REGISTRY_USER, and DOCKER_REGISTRY_PASS env vars",
       );
     }
+    if (!repo.includes("/")) {
+      throw new Error(
+        `DOCKER_REGISTRY_REPO must include namespace (e.g. "username/repo"), got: "${repo}"`,
+      );
+    }
 
     const remoteTag = `${repo}:${args.profile}-${args.version}`;
     const commitTag = `${repo}:${args.profile}-${GIT_SHA}`;
@@ -134,7 +146,7 @@ export class GatewayImage extends pulumi.ComponentResource {
     // Multi-platform builds produce a manifest list that works on any VPS architecture (amd64 + arm64).
     // Default is single-platform (host arch only) — fast but only works on matching VPS types.
     // Multi-platform first build is slow (~30min) due to QEMU cross-compilation; subsequent builds
-    // use registry cache (cacheFrom/cacheTo). load: false is required for multi-platform.
+    // use registry cache (cacheFrom/cacheTo).
     const platforms = args.multiPlatform
       ? [docker_build.Platform.Linux_amd64, docker_build.Platform.Linux_arm64]
       : undefined;
@@ -145,7 +157,8 @@ export class GatewayImage extends pulumi.ComponentResource {
         tags: [remoteTag],
         dockerfile: { location: path.join(tempDir, "Dockerfile") },
         context: { location: tempDir },
-        ...(platforms ? { platforms, load: false } : { load: false }),
+        ...(platforms ? { platforms } : {}),
+        load: false, // Always false in push mode (no local daemon); also required for multi-platform
         push: true,
         buildOnPreview: false,
         cacheFrom: [{ registry: { ref: remoteTag } }],
