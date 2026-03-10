@@ -118,21 +118,22 @@ All containers per gateway share a single network namespace via the Tailscale si
 
 Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 
-| Key                          | Type                                          | Required | Description                                                           |
-| ---------------------------- | --------------------------------------------- | -------- | --------------------------------------------------------------------- |
-| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                          |
-| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                    |
-| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                       |
-| `sshKeyId`                   | string                                        | no       | SSH key ID or name at provider (auto-generated if omitted)            |
-| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                           |
-| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                             |
-| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                      |
-| `dockerhubPush`              | boolean                                       | no       | Build locally + push to Docker Hub (default: false)                   |
-| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: false) |
-| `autoUpdate`                 | boolean                                       | no       | Automatic security updates via `unattended-upgrades` (default: false) |
-| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (`{ backups?: boolean }`)                    |
-| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                       |
-| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` — env vars for init + runtime                  |
+| Key                          | Type                                          | Required | Description                                                                           |
+| ---------------------------- | --------------------------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                                          |
+| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                                    |
+| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                                       |
+| `sshKeyId`                   | string                                        | no       | SSH key ID or name at provider (auto-generated if omitted)                            |
+| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                                           |
+| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                             |
+| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                                      |
+| `dockerhubPush`              | boolean                                       | no       | Build locally + push to Docker Hub (default: false)                                   |
+| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: false)                 |
+| `platform`                   | string                                        | no       | Docker platform of the VPS, e.g. `linux/amd64`. Required when `multiPlatform` is true |
+| `autoUpdate`                 | boolean                                       | no       | Automatic security updates via `unattended-upgrades` (default: false)                 |
+| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (`{ backups?: boolean }`)                                    |
+| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                       |
+| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` — env vars for init + runtime                                  |
 
 ## Deployment Model
 
@@ -140,7 +141,7 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 - Each gateway instance is composed of **5 Pulumi components** in a pipeline (see Component Hierarchy).
 - Envoy is the sole egress proxy — all TCP egress routes through it via iptables REDIRECT.
 - **Image builds** have two modes controlled by `dockerhubPush` stack config:
-  - **`dockerhubPush: true`**: Build locally, push to Docker Hub, pull on VPS via `docker.RemoteImage`. Requires `DOCKER_REGISTRY_REPO`, `DOCKER_REGISTRY_USER`, `DOCKER_REGISTRY_PASS` env vars. Uses registry-backed build cache (`cacheFrom`/`cacheTo` with inline cache metadata) so subsequent builds only rebuild changed layers. By default builds for the host architecture only. Set `multiPlatform: true` to build for both `linux/amd64` and `linux/arm64` — required when deploying to both amd64 (`cx` series) and arm64 (`cax` series) VPS types. First multi-platform build is slow (~30min due to QEMU cross-compilation); subsequent builds use registry cache.
+  - **`dockerhubPush: true`**: Build locally, push to Docker Hub, pull on VPS via `docker.RemoteImage`. Requires `DOCKER_REGISTRY_REPO`, `DOCKER_REGISTRY_USER`, `DOCKER_REGISTRY_PASS` env vars. Uses registry-backed build cache (`cacheFrom`/`cacheTo` with inline cache metadata) so subsequent builds only rebuild changed layers. By default builds for the host architecture only. Set `multiPlatform: true` to build for both `linux/amd64` and `linux/arm64` — required when deploying to both amd64 (`cx` series) and arm64 (`cax` series) VPS types. When `multiPlatform` is true, `platform` must also be set in stack config (e.g. `linux/amd64`) so the VPS pulls the correct architecture from the manifest list. A `docker rmi` runs before each pull to clear stale cached images (the Docker provider's `findImage()` short-circuits on local tag match and ignores the `platform` field). First multi-platform build is slow (~30min due to QEMU cross-compilation); subsequent builds use registry cache.
   - **`dockerhubPush: false` (default)**: Build on VPS via `@pulumi/docker-build` (BuildKit) with `DOCKER_HOST=ssh://`. Known limitation: the provider creates an unmanaged BuildKit container whose cache accumulates on disk ([pulumi/pulumi-docker-build#65](https://github.com/pulumi/pulumi-docker-build/issues/65)). Manual cleanup required — see warning emitted during `pulumi up`.
 - **Tailscale sidecar model**: Each gateway has a dedicated Tailscale sidecar container (`tailscale-<profile>`) that owns the network namespace. The sidecar runs the official `containerboot` entrypoint (Tailscale's Docker image entrypoint). The gateway and envoy containers share the sidecar's netns via `network_mode: container:tailscale-<profile>`.
 - The sidecar entrypoint sets iptables REDIRECT rules, then `exec`s `containerboot` which handles Tailscale auth, state, and serve config automatically.

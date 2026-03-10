@@ -145,6 +145,7 @@ const gatewayInstances = gateways.map((gw) => {
       imageSteps: gw.imageSteps,
       dockerhubPush: cfg.getBoolean("dockerhubPush"),
       multiPlatform: cfg.getBoolean("multiPlatform"),
+      platform: cfg.get("platform"),
     },
     { dependsOn: [bootstrap] },
   );

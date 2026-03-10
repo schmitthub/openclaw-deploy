@@ -118,6 +118,7 @@ export interface StackConfig {
   // Build
   dockerhubPush?: boolean; // build locally + push to Docker Hub (default: false)
   multiPlatform?: boolean; // build for amd64 + arm64 when dockerhubPush is true (default: false)
+  platform?: string; // Docker platform for the VPS, e.g. "linux/amd64" or "linux/arm64" (used for multi-platform pulls)
 
   // Gateways (1+)
   gateways: [GatewayConfig, ...GatewayConfig[]];

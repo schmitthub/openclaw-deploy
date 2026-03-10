@@ -405,21 +405,22 @@ pulumi up
 
 Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for a complete example.
 
-| Key                          | Type                                          | Required | Description                                                                    |
-| ---------------------------- | --------------------------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                                   |
-| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                             |
-| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                                |
-| `sshKeyId`                   | string                                        | no       | SSH key ID at provider (auto-generated if omitted)                             |
-| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                                    |
-| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                      |
-| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                               |
-| `dockerhubPush`              | boolean                                       | no       | Build locally and push to Docker Hub (default: `false`)                        |
-| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: `false`)        |
-| `autoUpdate`                 | boolean                                       | no       | Enable automatic security updates via `unattended-upgrades` (default: `false`) |
-| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (see below)                                           |
-| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                |
-| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` env vars for init + runtime                             |
+| Key                          | Type                                          | Required | Description                                                                            |
+| ---------------------------- | --------------------------------------------- | -------- | -------------------------------------------------------------------------------------- |
+| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                                           |
+| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                                     |
+| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                                        |
+| `sshKeyId`                   | string                                        | no       | SSH key ID at provider (auto-generated if omitted)                                     |
+| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                                            |
+| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                              |
+| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                                       |
+| `dockerhubPush`              | boolean                                       | no       | Build locally and push to Docker Hub (default: `false`)                                |
+| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: `false`)                |
+| `platform`                   | string                                        | no       | Docker platform of the VPS (e.g. `linux/amd64`). Required when `multiPlatform` is true |
+| `autoUpdate`                 | boolean                                       | no       | Enable automatic security updates via `unattended-upgrades` (default: `false`)         |
+| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (see below)                                                   |
+| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                        |
+| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` env vars for init + runtime                                     |
 
 **Gateway profile fields:**
 
@@ -592,15 +593,17 @@ If you deploy to both amd64 (`cx` series on Hetzner) and arm64 (`cax` series on 
 
 ```yaml
 openclaw-deploy:multiPlatform: true
+openclaw-deploy:platform: linux/amd64 # required: tells the VPS which architecture to pull
 ```
 
-This builds both `linux/amd64` and `linux/arm64` images and pushes a manifest list to Docker Hub. The VPS pulls the correct architecture automatically.
+This builds both `linux/amd64` and `linux/arm64` images and pushes a manifest list to Docker Hub. The `platform` config tells the VPS which architecture to pull from the manifest list.
 
 **Trade-offs:**
 
 - **First build is slow** (~30 minutes on an M-series Mac) because the non-native architecture is cross-compiled via QEMU emulation. This is a one-time cost.
 - **Subsequent builds are fast** — registry-backed build cache (`cacheFrom`/`cacheTo`) means only changed layers are rebuilt. The cache is stored inline in the pushed image on Docker Hub.
 - **Without `multiPlatform`**, builds complete in seconds (no cross-compilation) but deploying an arm64 image to an amd64 VPS (or vice versa) will fail with `exec format error`.
+- **`platform` is required** when `multiPlatform` is true. The Pulumi Docker provider's `RemoteImage` resource can select the wrong architecture from a manifest list if a stale image is cached locally. Setting `platform` explicitly (e.g. `linux/amd64` for Hetzner `cx` series, `linux/arm64` for `cax` series) ensures the correct variant is pulled. Common values: `linux/amd64` (Intel/AMD VPS), `linux/arm64` (ARM VPS like Hetzner `cax` or Oracle Ampere).
 
 > **Note:** `multiPlatform` only applies when `dockerhubPush: true`. The on-VPS build mode (`dockerhubPush: false`) always builds for the server's native architecture.
 

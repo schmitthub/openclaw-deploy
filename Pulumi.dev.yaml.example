@@ -3,6 +3,8 @@ config:
   openclaw-deploy:hetzner:
     backups: true
   openclaw-deploy:dockerhubPush: true
+  # openclaw-deploy:multiPlatform: true  # Build for amd64 + arm64 (requires dockerhubPush + platform)
+  # openclaw-deploy:platform: linux/amd64  # Required when multiPlatform is true (e.g. linux/amd64, linux/arm64)
   openclaw-deploy:provider: hetzner
   openclaw-deploy:serverType: cx23
   openclaw-deploy:region: nbg1
