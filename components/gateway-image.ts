@@ -249,13 +249,13 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this, provider: remoteDockerProvider, dependsOn: [pulled] },
     );
 
-    // Prune dangling images on VPS after pull
+    // Prune all images not used by running containers
     new command.remote.Command(
       `${name}-prune`,
       {
         connection: args.connection,
         create:
-          "docker image prune -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
+          "docker image prune -a -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
         triggers: [buildInputDigest],
       },
       { parent: this, dependsOn: [pulled] },
@@ -332,13 +332,13 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
     );
 
-    // Prune dangling images after build (previous untagged builds)
+    // Prune all images not used by running containers
     new command.remote.Command(
       `${name}-prune`,
       {
         connection: args.connection,
         create:
-          "docker image prune -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
+          "docker image prune -a -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
         triggers: [buildInputDigest],
       },
       { parent: this, dependsOn: [image] },
