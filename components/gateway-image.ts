@@ -80,14 +80,35 @@ export class GatewayImage extends pulumi.ComponentResource {
       bypassScript,
     );
 
-    // Write build context files to a stable temp directory.
-    // Using a stable path (not mkdtempSync) avoids accumulating stale dirs across runs.
-    // Only write if content changed — preserves mtime so BuildKit context hash is stable.
-    const tempDir = path.join(os.tmpdir(), `openclaw-build-${args.profile}`);
+    // Write build context to a content-addressed temp directory.
+    // The path includes the digest so context.location changes when templates change,
+    // which the docker-build provider detects as an input diff.
+    // Clean up stale dirs from previous builds for this profile.
+    const shortHash = buildInputDigest.slice(7, 19); // 12 hex chars from sha256:...
+    const dirPrefix = `openclaw-build-${args.profile}-`;
+    const tempDir = path.join(os.tmpdir(), `${dirPrefix}${shortHash}`);
+    for (const entry of fs.readdirSync(os.tmpdir())) {
+      if (entry.startsWith(dirPrefix) && entry !== `${dirPrefix}${shortHash}`) {
+        try {
+          fs.rmSync(path.join(os.tmpdir(), entry), {
+            recursive: true,
+            force: true,
+          });
+        } catch {
+          // Best-effort cleanup; stale dir will be removed on next run.
+        }
+      }
+    }
     fs.mkdirSync(tempDir, { recursive: true });
-    writeIfChanged(path.join(tempDir, "Dockerfile"), dockerfile, 0o644);
-    writeIfChanged(path.join(tempDir, "entrypoint.sh"), entrypoint, 0o755);
-    writeIfChanged(path.join(tempDir, "firewall-bypass"), bypassScript, 0o700);
+    fs.writeFileSync(path.join(tempDir, "Dockerfile"), dockerfile, {
+      mode: 0o644,
+    });
+    fs.writeFileSync(path.join(tempDir, "entrypoint.sh"), entrypoint, {
+      mode: 0o755,
+    });
+    fs.writeFileSync(path.join(tempDir, "firewall-bypass"), bypassScript, {
+      mode: 0o700,
+    });
 
     if (args.multiPlatform && !args.dockerhubPush) {
       throw new Error(
@@ -103,11 +124,11 @@ export class GatewayImage extends pulumi.ComponentResource {
     }
 
     if (args.dockerhubPush) {
-      const result = this.buildAndPush(name, args, tempDir, buildInputDigest);
+      const result = this.buildAndPush(name, args, tempDir);
       this.imageName = result.imageName;
       this.imageDigest = result.imageDigest;
     } else {
-      const result = this.buildOnHost(name, args, tempDir, buildInputDigest);
+      const result = this.buildOnHost(name, args, tempDir);
       this.imageName = result.imageName;
       this.imageDigest = result.imageDigest;
     }
@@ -123,7 +144,6 @@ export class GatewayImage extends pulumi.ComponentResource {
     name: string,
     args: GatewayImageArgs,
     tempDir: string,
-    buildInputDigest: string,
   ): { imageName: pulumi.Output<string>; imageDigest: pulumi.Output<string> } {
     const repo = process.env.DOCKER_REGISTRY_REPO;
     const username = process.env.DOCKER_REGISTRY_USER;
@@ -151,36 +171,97 @@ export class GatewayImage extends pulumi.ComponentResource {
       throw new Error(`Invalid characters in Docker tag: ${commitTag}`);
     }
 
-    // Multi-platform builds produce a manifest list that works on any VPS architecture (amd64 + arm64).
-    // Default is single-platform (host arch only) — fast but only works on matching VPS types.
-    // Multi-platform first build is slow (~30min) due to QEMU cross-compilation; subsequent builds
-    // use registry cache (cacheFrom/cacheTo).
-    const platforms = args.multiPlatform
-      ? [docker_build.Platform.Linux_amd64, docker_build.Platform.Linux_arm64]
-      : undefined;
-
-    const image = new docker_build.Image(
-      `${name}-image`,
+    const registries = [
       {
-        tags: [remoteTag],
-        dockerfile: { location: path.join(tempDir, "Dockerfile") },
-        context: { location: tempDir },
-        ...(platforms ? { platforms } : {}),
-        load: false, // Always false in push mode (no local daemon); also required for multi-platform
-        push: true,
-        buildOnPreview: false,
-        cacheFrom: [{ registry: { ref: remoteTag } }],
-        cacheTo: [{ inline: {} }],
-        registries: [
+        address: "docker.io",
+        username,
+        password: pulumi.secret(password),
+      },
+    ];
+
+    // The resource that downstream depends on — either a single Image or an Index.
+    // imageDigestTrigger is the registry manifest digest — changes on every push,
+    // used to force RemoteImage replacement (triggers, not pullTriggers).
+    let image: pulumi.Resource;
+    let imageDigestTrigger: pulumi.Output<string>;
+
+    if (args.multiPlatform) {
+      // Build each platform separately with independent caches, then join via Index.
+      // This avoids the buildx limitation where multi-platform builds only cache one platform.
+      // First build per platform is slow (~30min for cross-arch via QEMU); subsequent builds
+      // use per-platform registry cache.
+      const platformBuilds = (
+        [
+          ["amd64", docker_build.Platform.Linux_amd64],
+          ["arm64", docker_build.Platform.Linux_arm64],
+        ] as const
+      ).map(([arch, platform]) => {
+        const archTag = `${remoteTag}-${arch}`;
+        const cacheTag = `${repo}:${args.profile}-cache-${arch}`;
+        return new docker_build.Image(
+          `${name}-image-${arch}`,
           {
+            tags: [archTag],
+
+            dockerfile: { location: path.join(tempDir, "Dockerfile") },
+            context: { location: tempDir },
+            platforms: [platform],
+            push: true,
+            buildOnPreview: false,
+            cacheFrom: [{ registry: { ref: cacheTag } }],
+            cacheTo: [
+              {
+                registry: {
+                  ref: cacheTag,
+                  mode: docker_build.CacheMode.Max,
+                },
+              },
+            ],
+            registries,
+          },
+          { parent: this },
+        );
+      });
+
+      // Join per-platform manifests into a single manifest list under the canonical tag.
+      const index = new docker_build.Index(
+        `${name}-index`,
+        {
+          sources: platformBuilds.map((b) => b.ref),
+          tag: remoteTag,
+          registry: {
             address: "docker.io",
             username,
             password: pulumi.secret(password),
           },
-        ],
-      },
-      { parent: this },
-    );
+        },
+        { parent: this, dependsOn: platformBuilds },
+      );
+      image = index;
+      // Use per-platform manifest digests — these change on every push.
+      // index.ref is just the tag string (no digest), useless as a trigger.
+      imageDigestTrigger = pulumi
+        .all(platformBuilds.map((b) => b.digest))
+        .apply((digests) => digests.join(","));
+    } else {
+      // Single-platform build (host arch only) — fast, no cross-compilation.
+      const singleImage = new docker_build.Image(
+        `${name}-image`,
+        {
+          tags: [remoteTag],
+          dockerfile: { location: path.join(tempDir, "Dockerfile") },
+          context: { location: tempDir },
+          push: true,
+          buildOnPreview: false,
+          cacheFrom: [{ registry: { ref: remoteTag } }],
+          cacheTo: [{ inline: {} }],
+          registries,
+        },
+        { parent: this },
+      );
+      image = singleImage;
+      imageDigestTrigger = singleImage.digest;
+    }
 
     // Pull on VPS via docker.RemoteImage with provider-level registryAuth.
     // Address must be "docker.io" for Docker Hub (provider normalizes internally).
@@ -215,20 +296,26 @@ export class GatewayImage extends pulumi.ComponentResource {
       {
         connection: args.connection,
         create: `docker rmi ${pullTag} 2>/dev/null || true`,
-        triggers: [buildInputDigest, ...(args.platform ? [args.platform] : [])],
+        triggers: [
+          imageDigestTrigger,
+          ...(args.platform ? [args.platform] : []),
+        ],
       },
       { parent: this, dependsOn: [image] },
     );
 
+    // Use triggers (not pullTriggers) to force resource replacement on digest change.
+    // pullTriggers does in-place update where findImage() can short-circuit on local tag.
+    // triggers forces delete+create = guaranteed fresh pull.
     const pulled = new docker.RemoteImage(
       `${name}-pull`,
       {
         name: pullTag,
         platform: args.platform,
-        pullTriggers: [
-          buildInputDigest,
-          ...(args.platform ? [args.platform] : []),
-        ],
+        triggers: {
+          digest: imageDigestTrigger,
+          ...(args.platform ? { platform: args.platform } : {}),
+        },
         keepLocally: true,
       },
       {
@@ -244,7 +331,7 @@ export class GatewayImage extends pulumi.ComponentResource {
       {
         sourceImage: pullTag,
         targetImage: commitTag,
-        tagTriggers: [buildInputDigest],
+        tagTriggers: [imageDigestTrigger],
       },
       { parent: this, provider: remoteDockerProvider, dependsOn: [pulled] },
     );
@@ -256,19 +343,14 @@ export class GatewayImage extends pulumi.ComponentResource {
         connection: args.connection,
         create:
           "docker image prune -a -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
-        triggers: [buildInputDigest],
+        triggers: [imageDigestTrigger],
       },
       { parent: this, dependsOn: [pulled] },
     );
 
-    // Return the stable version-tagged image name.
-    // Prefer the pulled repo digest when available; fall back to a deterministic
-    // build-input digest so downstream container replacement is stable.
     return {
       imageName: pulumi.output(pullTag),
-      imageDigest: pulumi
-        .output(pulled.repoDigest)
-        .apply((repoDigest) => repoDigest || buildInputDigest),
+      imageDigest: imageDigestTrigger,
     };
   }
 
@@ -277,7 +359,6 @@ export class GatewayImage extends pulumi.ComponentResource {
     name: string,
     args: GatewayImageArgs,
     tempDir: string,
-    buildInputDigest: string,
   ): { imageName: pulumi.Output<string>; imageDigest: pulumi.Output<string> } {
     const tag = `openclaw-gateway-${args.profile}:${args.version}`;
     const commitTag = `openclaw-gateway-${args.profile}:${GIT_SHA}`;
@@ -322,12 +403,15 @@ export class GatewayImage extends pulumi.ComponentResource {
       { host: args.dockerHost },
       { parent: this },
     );
+    // image.digest is the SHA256 content hash — changes on every rebuild.
+    // image.ref is just the tag string when push: false (no digest suffix),
+    // so it wouldn't trigger downstream resources on content changes.
     new docker.Tag(
       `${name}-commit-tag`,
       {
         sourceImage: tag,
         targetImage: commitTag,
-        tagTriggers: [buildInputDigest],
+        tagTriggers: [image.digest],
       },
       { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
     );
@@ -339,14 +423,14 @@ export class GatewayImage extends pulumi.ComponentResource {
         connection: args.connection,
         create:
           "docker image prune -a -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
-        triggers: [buildInputDigest],
+        triggers: [image.digest],
       },
       { parent: this, dependsOn: [image] },
     );
 
     return {
       imageName: firstTag(image, name),
-      imageDigest: pulumi.output(buildInputDigest),
+      imageDigest: image.digest,
     };
   }
 }
@@ -379,23 +463,4 @@ function firstTag(
     }
     return tags[0];
   });
-}
-
-/** Write file only if content differs from what's on disk — preserves mtime for stable BuildKit context hashing. */
-function writeIfChanged(filePath: string, content: string, mode: number) {
-  try {
-    const existing = fs.readFileSync(filePath, "utf-8");
-    if (existing === content) return;
-  } catch (err: unknown) {
-    if (
-      !(
-        err instanceof Error &&
-        "code" in err &&
-        (err as NodeJS.ErrnoException).code === "ENOENT"
-      )
-    ) {
-      throw err;
-    }
-  }
-  fs.writeFileSync(filePath, content, { mode });
 }

@@ -87,8 +87,10 @@ config:
         - >-
           onboard --non-interactive --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health
         - config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
-        - config set gateway.auth.mode trusted-proxy
+        - config set gateway.auth.mode token
+        - config set gateway.controlUi.dangerouslyDisableDeviceAuth true
         - config set gateway.auth.trustedProxy.userHeader tailscale-user-login
+        # - config set tools.exec.host gateway
         - config set gateway.trustedProxies "[\"127.0.0.1/8\"]"
         - config set tools.profile full
         - config set skills.install.nodeManager pnpm

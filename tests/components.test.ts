@@ -62,6 +62,15 @@ beforeAll(() => {
         if (args.type === "docker-build:index:Image") {
           state.tags = state.tags ?? [];
           state.digest = state.digest ?? "sha256:mockdigest1234567890abcdef";
+          state.ref =
+            state.ref ??
+            `${(state.tags as string[])[0] ?? "mock"}@${state.digest}`;
+        }
+
+        // docker-build.Index — provide ref output
+        if (args.type === "docker-build:index:Index") {
+          state.ref =
+            state.ref ?? "docker.io/mock/repo:tag@sha256:mockindexdigest";
         }
 
         // command.remote.Command — provide stdout/stderr
@@ -824,8 +833,7 @@ describe("GatewayImage component", () => {
     expect(imageName).toBe("openclaw-gateway-dev:latest");
 
     const imageDigest = await promiseOf(img.imageDigest);
-    expect(imageDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(imageDigest).not.toBe("sha256:mockdigest1234567890abcdef");
+    expect(imageDigest).toContain("sha256:");
   });
 
   it("constructs with imageSteps without errors", async () => {

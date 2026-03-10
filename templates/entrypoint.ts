@@ -84,6 +84,20 @@ if command -v filebrowser >/dev/null 2>&1; then
   gosu node filebrowser --address 127.0.0.1 --port ${FILEBROWSER_PORT} --noauth --root /home/node --baseurl /browse &
 fi
 
+# Write PID 1 environment to ~/.ssh/environment so SSH sessions inherit
+# Docker ENV and runtime -e vars. sshd reads this file natively when
+# PermitUserEnvironment is enabled — no shell sourcing needed.
+mkdir -p /home/node/.ssh
+printenv -0 | while IFS='=' read -r -d '' key val; do
+  case "$key" in
+    HOME|USER|LOGNAME|SHELL|TERM|PWD|OLDPWD|SHLVL|_) continue ;;
+  esac
+  printf '%s=%s\\n' "$key" "$val"
+done > /home/node/.ssh/environment
+chown -R node:node /home/node/.ssh
+chmod 700 /home/node/.ssh
+chmod 600 /home/node/.ssh/environment
+
 # Drop privileges and exec the CMD as the node user.
 exec gosu node "$@"
 `;
