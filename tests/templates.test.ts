@@ -673,16 +673,27 @@ describe("renderFirewallBypass", () => {
     expect(script).toContain(`\${1:-${DEFAULT_BYPASS_TIMEOUT_SECS}}`);
   });
 
-  it("starts ssh -D SOCKS proxy on loopback", () => {
-    expect(script).toContain(`ssh -D "127.0.0.1:$SOCKS_PORT" -f -N`);
+  it("starts danted SOCKS5 proxy", () => {
+    expect(script).toContain('danted -f "$DANTED_CONF"');
   });
 
-  it("connects to local sshd on correct port", () => {
-    expect(script).toContain(`root@127.0.0.1 -p ${SSHD_PORT}`);
+  it("writes danted config with loopback binding", () => {
+    expect(script).toContain("internal: 127.0.0.1 port = $SOCKS_PORT");
+    expect(script).toContain("socksmethod: none");
+  });
+
+  it("enables UDP ASSOCIATE in danted config", () => {
+    expect(script).toContain("command: connect udpassociate");
+    expect(script).toContain("protocol: tcp udp");
+  });
+
+  it("writes proxychains config for node user", () => {
+    expect(script).toContain("PROXYCHAINS_CONF=");
+    expect(script).toContain("socks5 127.0.0.1 $SOCKS_PORT");
   });
 
   it("saves PID to pidfile", () => {
-    expect(script).toContain('echo "$PID" > "$PIDFILE"');
+    expect(script).toContain('echo "$DANTED_PID" > "$PIDFILE"');
   });
 
   it("has stop subcommand", () => {
@@ -695,18 +706,152 @@ describe("renderFirewallBypass", () => {
     expect(script).toContain("list_proxy");
   });
 
-  it("disables SSH host key checking for loopback", () => {
-    expect(script).toContain("StrictHostKeyChecking=no");
-    expect(script).toContain("UserKnownHostsFile=/dev/null");
+  it("validates timeout input", () => {
+    expect(script).toContain("timeout must be a positive integer");
   });
 
-  it("provides actionable error if ssh fails", () => {
-    expect(script).toContain(`is sshd running on port ${SSHD_PORT}?`);
+  it("pre-checks port availability", () => {
+    expect(script).toContain("port $SOCKS_PORT is already in use");
   });
 
-  it("auto-kills after timeout", () => {
-    expect(script).toContain('sleep "$TIMEOUT"; kill "$PID"');
-    expect(script).toContain("disown");
+  it("runs in foreground with trap and wait for cleanup", () => {
+    expect(script).toContain("trap '");
+    expect(script).toContain("INT TERM HUP");
+    expect(script).toContain('wait "$DANTED_PID"');
+    expect(script).not.toContain("disown");
+  });
+
+  it("trap handler disables set -e to survive closed stderr on HUP", () => {
+    expect(script).toContain("trap 'set +e;");
+  });
+
+  it("sets trap before danted starts (not after)", () => {
+    const trapIdx = script.indexOf("trap '");
+    const dantedIdx = script.indexOf('danted -f "$DANTED_CONF" &');
+    expect(trapIdx).toBeGreaterThan(0);
+    expect(dantedIdx).toBeGreaterThan(0);
+    expect(trapIdx).toBeLessThan(dantedIdx);
+  });
+
+  it("verifies kill succeeded with SIGKILL fallback", () => {
+    expect(script).toContain("kill -9");
+  });
+
+  it("validates pidfile content before using", () => {
+    expect(script).toContain("corrupt pidfile");
+  });
+
+  it("shows proxychains and curl usage examples (no wget)", () => {
+    expect(script).toContain("proxychains4 -f");
+    expect(script).toContain("socks5h://localhost:$SOCKS_PORT");
+    // wget does not support SOCKS5 natively — only proxychains works
+    expect(script).not.toContain("wget -e");
+    expect(script).not.toContain("http_proxy=socks5h");
+  });
+
+  it("logs connections in real-time via stderr", () => {
+    expect(script).toContain("logoutput: stderr");
+    expect(script).toContain("Connection log below");
+  });
+
+  it("auto-detects external interface from /proc/net/route", () => {
+    expect(script).toContain("/proc/net/route");
+    expect(script).toContain("EXT_IFACE=");
+    expect(script).toContain("external: $EXT_IFACE");
+    expect(script).not.toContain("external: eth0");
+  });
+
+  it("runs danted as root for iptables bypass (user.unprivileged: root)", () => {
+    expect(script).toContain("user.privileged: root");
+    expect(script).toContain("user.unprivileged: root");
+    expect(script).not.toContain("user.unprivileged: nobody");
+  });
+
+  it("restricts client access to loopback only", () => {
+    expect(script).toContain("from: 127.0.0.0/8 to: 0.0.0.0/0");
+  });
+
+  it("proxychains config enables DNS proxying and strict chain", () => {
+    expect(script).toContain("strict_chain");
+    expect(script).toContain("proxy_dns");
+  });
+
+  it("detects danted crash on startup", () => {
+    expect(script).toContain("danted exited immediately");
+    expect(script).toContain("not listening after");
+  });
+
+  it("cleanup removes all generated files via remove_files helper", () => {
+    expect(script).toContain("remove_files()");
+    expect(script).toContain(
+      'rm -f "$PIDFILE" "$DANTED_CONF" "$PROXYCHAINS_CONF"',
+    );
+  });
+
+  it("uses kill_gracefully with SIGKILL escalation and logging", () => {
+    expect(script).toContain("kill_gracefully()");
+    expect(script).toContain("after SIGTERM, sending SIGKILL");
+    expect(script).toContain("failed to kill");
+  });
+
+  it("makes proxychains config world-readable", () => {
+    expect(script).toContain('chmod 644 "$PROXYCHAINS_CONF"');
+  });
+
+  it("stop_proxy delegates to kill_gracefully for clean shutdown", () => {
+    const stopFn = script.slice(
+      script.indexOf("stop_proxy()"),
+      script.indexOf("list_proxy()"),
+    );
+    expect(stopFn).toContain("kill_gracefully");
+  });
+
+  it("stop_proxy verifies process is danted before killing (PID reuse protection)", () => {
+    const stopFn = script.slice(
+      script.indexOf("stop_proxy()"),
+      script.indexOf("list_proxy()"),
+    );
+    expect(stopFn).toContain("/proc/$DANTED_PID/cmdline");
+    expect(stopFn).toContain("is not danted");
+  });
+
+  it("fails with clear error if no default route found", () => {
+    expect(script).toContain("cannot determine default route interface");
+  });
+
+  it("readiness-loop failure calls cleanup() for consistent error handling", () => {
+    // After the readiness loop, failure should call cleanup() not separate kill+remove
+    const readinessError = script.slice(
+      script.indexOf("SOCKS port $SOCKS_PORT not listening"),
+    );
+    const nextLines = readinessError.slice(0, readinessError.indexOf("fi"));
+    expect(nextLines).toContain("cleanup");
+  });
+
+  it("warns on timeout exceeding 1 hour", () => {
+    expect(script).toContain("3600");
+    expect(script).toContain("proxy will remain open for a long time");
+  });
+
+  it("list_proxy warns on corrupt pidfile", () => {
+    // list_proxy should warn (not silently remove) on corrupt pidfile
+    const listFn = script.slice(script.indexOf("list_proxy()"));
+    expect(listFn).toContain("corrupt pidfile");
+  });
+
+  it("proxychains config notes it is ephemeral", () => {
+    expect(script).toContain("only exists while the proxy is running");
+  });
+
+  it("uses wait + background timeout instead of sleep", () => {
+    // Background timeout killer sends SIGTERM to danted
+    expect(script).toContain('(sleep "$TIMEOUT" && kill "$DANTED_PID"');
+    expect(script).toContain("TIMEOUT_PID=$!");
+    expect(script).toContain('wait "$DANTED_PID"');
+    // No blocking sleep for timeout in start_proxy main flow
+    const startFn = script.slice(script.indexOf("start_proxy()"));
+    const waitIdx = startFn.indexOf('wait "$DANTED_PID"');
+    expect(waitIdx).toBeGreaterThan(0);
   });
 
   it("is idempotent — same output each time", () => {
@@ -745,6 +890,15 @@ describe("renderAgentPrompt", () => {
 
   it("contains IaC autogenerated warning", () => {
     expect(prompt).toContain("IaC AUTOGENERATED");
+  });
+
+  it("does not include wget SOCKS5 examples (wget lacks native SOCKS5 support)", () => {
+    expect(prompt).not.toContain("ALL_PROXY=socks5h");
+    expect(prompt).not.toContain("wget -e");
+  });
+
+  it("notes proxychains config is ephemeral", () => {
+    expect(prompt).toContain("only exists while the proxy is running");
   });
 
   it("is idempotent — same output each time", () => {

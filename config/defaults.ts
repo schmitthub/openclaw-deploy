@@ -53,6 +53,8 @@ export const CORE_APT_PACKAGES = [
   "ripgrep",
   "jq",
   "openssh-server",
+  "dante-server", // SOCKS5 proxy server for firewall bypass (root-only, supports UDP ASSOCIATE)
+  "proxychains4", // SOCKS5 client wrapper for agent convenience (transparent TCP proxying)
 ];
 
 // Tailscale Funnel allowed ports

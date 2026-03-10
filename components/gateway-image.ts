@@ -49,6 +49,8 @@ export interface GatewayImageArgs {
   dockerhubPush?: boolean;
   /** Build for both linux/amd64 and linux/arm64 (only applies when dockerhubPush is true). First build is slow (~30min) due to cross-compilation; subsequent builds use registry cache. Default: false (builds for host architecture only). */
   multiPlatform?: boolean;
+  /** Docker platform of the VPS, e.g. "linux/amd64". Required when multiPlatform is true so RemoteImage pulls the correct architecture. */
+  platform?: string;
 }
 
 export class GatewayImage extends pulumi.ComponentResource {
@@ -91,6 +93,12 @@ export class GatewayImage extends pulumi.ComponentResource {
       throw new Error(
         "multiPlatform: true requires dockerhubPush: true. " +
           "On-VPS builds always use the server's native architecture.",
+      );
+    }
+    if (args.multiPlatform && !args.platform) {
+      throw new Error(
+        'multiPlatform: true requires "platform" in stack config (e.g. "linux/amd64") ' +
+          "so the VPS pulls the correct architecture from the manifest list.",
       );
     }
 
@@ -198,14 +206,36 @@ export class GatewayImage extends pulumi.ComponentResource {
     const pullTag = hasExplicitRegistry(remoteTag)
       ? remoteTag
       : `docker.io/${remoteTag}`;
+
+    // Remove stale local image before pulling. The Docker provider's findImage()
+    // short-circuits on local tag match and ignores the platform field, so a cached
+    // arm64 image prevents re-pulling the correct amd64 variant.
+    const removeStale = new command.remote.Command(
+      `${name}-remove-stale`,
+      {
+        connection: args.connection,
+        create: `docker rmi ${pullTag} 2>/dev/null || true`,
+        triggers: [buildInputDigest, ...(args.platform ? [args.platform] : [])],
+      },
+      { parent: this, dependsOn: [image] },
+    );
+
     const pulled = new docker.RemoteImage(
       `${name}-pull`,
       {
         name: pullTag,
-        pullTriggers: [buildInputDigest],
+        platform: args.platform,
+        pullTriggers: [
+          buildInputDigest,
+          ...(args.platform ? [args.platform] : []),
+        ],
         keepLocally: true,
       },
-      { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
+      {
+        parent: this,
+        provider: remoteDockerProvider,
+        dependsOn: [image, removeStale],
+      },
     );
 
     // Apply commit SHA tag on VPS for traceability (docker images shows which commit built this)
