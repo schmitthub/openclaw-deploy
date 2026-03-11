@@ -1,4 +1,4 @@
-.PHONY: update-digests status logs restart exec shell openclaw ps bypass install uninstall
+.PHONY: update-digests status logs restart exec shell openclaw stats health ps bypass install uninstall
 
 OCM := ./scripts/manage.sh
 STACK ?=
@@ -38,6 +38,14 @@ shell:
 ## openclaw: Run openclaw CLI (CMD="config get gateway.port")
 openclaw:
 	@$(OCM) $(_OCM_FLAGS) openclaw $(CMD)
+
+## stats: Container CPU, memory, network, block I/O
+stats:
+	@$(OCM) $(_OCM_FLAGS) stats
+
+## health: Full system health (VPS host + disk + memory + containers)
+health:
+	@$(OCM) $(_OCM_FLAGS) health
 
 ## ps: Docker ps on VPS
 ps:

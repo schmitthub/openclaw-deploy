@@ -669,12 +669,18 @@ ocm status                        # container status for current profile
 ocm logs -f                       # follow gateway logs
 ocm logs envoy -n 100             # last 100 envoy log lines
 ocm restart gateway               # restart just the gateway container
-ocm restart                       # restart all containers (gateway + envoy + sidecar)
+ocm restart                       # restart all (dependency order: sidecar→envoy→gateway)
+ocm restart envoy                 # restart envoy + gateway (dependency cascade)
 ocm shell                         # bash as node user in gateway
 ocm shell root                    # bash as root in gateway
 ocm shell vps                     # SSH into VPS host as root
 ocm exec -- ls /home/node         # run a command in the gateway
+ocm exec -u root -- whoami        # run as root in the gateway
+ocm run -- openclaw --version     # ephemeral docker run --rm with gateway image
+ocm run -u root -- apt list       # ephemeral run as root
 ocm openclaw config get gateway.port
+ocm stats                         # container CPU, memory, network, block I/O
+ocm health                        # full system health (VPS + disk + memory + containers)
 ocm ts-status                     # tailscale status from sidecar
 ocm bypass 120                    # firewall bypass for 2 minutes
 ocm ps                            # docker ps on VPS
@@ -692,4 +698,6 @@ make logs SERVICE=envoy
 make restart SERVICE=gateway
 make shell TARGET=vps
 make openclaw CMD="config get gateway.port"
+make stats
+make health
 ```
