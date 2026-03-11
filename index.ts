@@ -228,6 +228,21 @@ const gatewayInstances = gateways.map((gw) => {
     { dependsOn: [envoyProxy, init] },
   );
 
+  // Prune unused images AFTER the gateway container is replaced.
+  // This must run after Gateway (not after GatewayImage) because the old container
+  // still references the old image during the build→pull phase. Pruning earlier
+  // leaves the old image orphaned on disk (~2-8GB per deploy).
+  new command.remote.Command(
+    `gateway-image-prune-${gw.profile}`,
+    {
+      connection: server.connection,
+      create:
+        "docker image prune -a -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
+      triggers: [image.imageDigest],
+    },
+    { dependsOn: [gateway] },
+  );
+
   // Post-deploy: write agent constraints to workspace/ocdeploy/AGENTS.md
   // Root-owned, read-only (444). Re-run only when content hash changes (Pulumi trigger).
   // Loaded into agent context via bootstrap-extra-files hook.

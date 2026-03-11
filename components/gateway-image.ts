@@ -2,7 +2,6 @@ import * as pulumi from "@pulumi/pulumi";
 import * as command from "@pulumi/command";
 import * as docker from "@pulumi/docker";
 import * as docker_build from "@pulumi/docker-build";
-import * as child_process from "child_process";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
@@ -13,24 +12,6 @@ import {
   renderFirewallBypass,
 } from "../templates";
 import type { ImageStep } from "../config/types";
-
-/** Git commit SHA (short, 7 chars) at plan time. Used as an additional image tag for commit-level identification. */
-let GIT_SHA: string;
-try {
-  GIT_SHA = child_process
-    .execSync("git rev-parse --short=7 HEAD", {
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    .toString()
-    .trim();
-} catch (err) {
-  const detail = err instanceof Error ? err.message : String(err);
-  throw new Error(
-    `Failed to determine git commit SHA via "git rev-parse --short=7 HEAD": ${detail}. ` +
-      `This command must run from within a git repository with git installed.`,
-    { cause: err },
-  );
-}
 
 export interface GatewayImageArgs {
   /** SSH connection args for remote commands */
@@ -161,14 +142,9 @@ export class GatewayImage extends pulumi.ComponentResource {
     }
 
     const remoteTag = `${repo}:${args.profile}-${args.version}`;
-    const commitTag = `${repo}:${args.profile}-${GIT_SHA}`;
-
     const SAFE_DOCKER_RE = /^[a-zA-Z0-9._\-/:]+$/;
     if (!SAFE_DOCKER_RE.test(remoteTag)) {
       throw new Error(`Invalid characters in Docker tag: ${remoteTag}`);
-    }
-    if (!SAFE_DOCKER_RE.test(commitTag)) {
-      throw new Error(`Invalid characters in Docker tag: ${commitTag}`);
     }
 
     const registries = [
@@ -229,11 +205,12 @@ export class GatewayImage extends pulumi.ComponentResource {
         .all(platformBuilds.map((b) => b.digest))
         .apply((digests) => digests.join(","));
 
+      // Git SHA resolved at runtime so the create string stays stable across commits.
       const manifestCreate = pulumi
         .all(platformBuilds.map((b) => b.ref))
         .apply(
           (refs) =>
-            `docker buildx imagetools create -t ${remoteTag} -t ${commitTag} ${refs.join(" ")}`,
+            `docker buildx imagetools create -t ${remoteTag} ${refs.join(" ")}`,
         );
 
       const manifestList = new command.local.Command(
@@ -242,7 +219,7 @@ export class GatewayImage extends pulumi.ComponentResource {
           create: manifestCreate,
           triggers: [imageDigestTrigger],
         },
-        { parent: this, dependsOn: platformBuilds },
+        { parent: this, dependsOn: platformBuilds, ignoreChanges: ["create"] },
       );
       image = manifestList;
     } else {
@@ -265,17 +242,18 @@ export class GatewayImage extends pulumi.ComponentResource {
       imageDigestTrigger = singleImage.digest;
     }
 
-    if (!args.multiPlatform) {
-      // Push git SHA tag for single-platform builds (multi-platform applies it in the manifest command).
-      new command.local.Command(
-        `${name}-commit-tag`,
-        {
-          create: `docker buildx imagetools create -t ${commitTag} ${remoteTag}`,
-          triggers: [imageDigestTrigger],
-        },
-        { parent: this, dependsOn: [image] },
-      );
-    }
+    // Push git SHA tag to registry for commit-level identification.
+    // Git SHA is resolved at runtime (not plan time) so the create string stays stable
+    // across commits. ignoreChanges on "create" prevents one-time migration diff from
+    // the old plan-time SHA — only `triggers` (image digest) controls re-execution.
+    new command.local.Command(
+      `${name}-commit-tag`,
+      {
+        create: `docker buildx imagetools create -t ${repo}:${args.profile}-$(git rev-parse --short=7 HEAD) ${remoteTag}`,
+        triggers: [imageDigestTrigger],
+      },
+      { parent: this, dependsOn: [image], ignoreChanges: ["create"] },
+    );
 
     // Pull on VPS via docker.RemoteImage with provider-level registryAuth.
     // Address must be "docker.io" for Docker Hub (provider normalizes internally).
@@ -321,7 +299,7 @@ export class GatewayImage extends pulumi.ComponentResource {
     // Use triggers (not pullTriggers) to force resource replacement on digest change.
     // pullTriggers does in-place update where findImage() can short-circuit on local tag.
     // triggers forces delete+create = guaranteed fresh pull.
-    const pulled = new docker.RemoteImage(
+    new docker.RemoteImage(
       `${name}-pull`,
       {
         name: pullTag,
@@ -337,18 +315,6 @@ export class GatewayImage extends pulumi.ComponentResource {
         provider: remoteDockerProvider,
         dependsOn: [image, removeStale],
       },
-    );
-
-    // Prune all images not used by running containers
-    new command.remote.Command(
-      `${name}-prune`,
-      {
-        connection: args.connection,
-        create:
-          "docker image prune -a -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
-        triggers: [imageDigestTrigger],
-      },
-      { parent: this, dependsOn: [pulled] },
     );
 
     return {
@@ -397,18 +363,6 @@ export class GatewayImage extends pulumi.ComponentResource {
         buildOnPreview: false,
       },
       { parent: this, provider: buildProvider },
-    );
-
-    // Prune all images not used by running containers
-    new command.remote.Command(
-      `${name}-prune`,
-      {
-        connection: args.connection,
-        create:
-          "docker image prune -a -f 2>&1 || echo 'WARNING: docker image prune failed (non-critical)'",
-        triggers: [image.digest],
-      },
-      { parent: this, dependsOn: [image] },
     );
 
     return {

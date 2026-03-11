@@ -328,6 +328,24 @@ Each gateway gets an `ocdeploy/AGENTS.md` file in the workspace (`/home/node/.op
 
 The prompt is rendered by `renderAgentPrompt()` in `templates/agent-prompt.ts`.
 
+## Testing
+
+Unit tests with mocked Pulumi resources (test doubles) are ineffective at detecting infrastructure regressions. Mocks do not validate resource lifecycle behavior — spurious replacements, missing triggers, incorrect dependency ordering, and stale state diffs are invisible to them.
+
+Before finalizing any work that touches components, templates, or `index.ts`:
+
+1. Run `npx tsc --noEmit` and `npx vitest run` — these catch type errors and template rendering bugs.
+2. Run `pulumi preview --diff --stack <stack>` — this is the **primary** regression check. Review the diff for:
+   - Unexpected resource replacements or re-creations
+   - Resources that should be unchanged showing diffs
+   - Missing or extraneous create/delete operations
+3. If `pulumi preview` shows unexpected changes, investigate and fix before proceeding. Do not dismiss preview diffs as "one-time migration costs" without confirming with the user.
+
+These integration-level checks are non-destructive (preview does not modify state) and must pass before work is considered complete.
+
+4. **Neo feedback on failures:** When `pulumi preview` shows unexpected diffs, resource errors, or other failures you cannot immediately diagnose, use the Pulumi `neo-bridge` MCP tool to ask Neo for guidance before attempting fixes. Provide the error output and relevant context.
+5. **Neo code review (required gate):** Before requesting Neo review, **commit and push** your changes so they are available on the remote. Then use the Pulumi `neo-bridge` MCP tool to request a code review from Neo. Provide: the commit hash, branch name, a summary of what was implemented, and the `pulumi preview --diff` output. Neo must approve the changes before proceeding with `pulumi up` or marking work as complete.
+
 ## Out of Scope (Unless Explicitly Requested)
 
 - Adding unrelated tooling or frameworks.
