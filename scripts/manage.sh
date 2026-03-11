@@ -100,8 +100,14 @@ _get_profiles() {
 _ssh() {
   local ip
   ip="$(_get_ip)"
+  # Separate leading SSH flags (e.g. -t) from the remote command so they are
+  # placed before the destination host — required for POSIX getopt platforms.
+  local ssh_opts=()
+  while [[ $# -gt 0 && "$1" == -* ]]; do
+    ssh_opts+=("$1"); shift
+  done
   ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-    "root@${ip}" "$@"
+    "${ssh_opts[@]}" "root@${ip}" "$@"
 }
 
 _docker() {
@@ -315,7 +321,7 @@ cmd_run() {
   image="$(_docker inspect --format '{{.Config.Image}}' "$cname" 2>/dev/null)" \
     || _die "Failed to inspect container '$cname'. Is it running?"
 
-  _ssh docker run --rm -it --user "$user" "$image" "${cmd[@]}"
+  _ssh -t docker run --rm -it --user "$user" "$image" "${cmd[@]}"
 }
 
 cmd_shell() {
@@ -433,7 +439,7 @@ ${BOLD}GLOBAL FLAGS${RESET}
   --profile <profile>   Override gateway profile (env: OCM_PROFILE)
 
 ${BOLD}COMMANDS${RESET}
-  init                  Interactive setup of defaults (~/.ocm.conf)
+  init                  Interactive setup of defaults (scripts/.ocm.conf)
   status                Show container status for the current profile
   logs [svc] [-f]       Container logs (svc: gateway, envoy, sidecar)
   restart [svc]         Restart with dependency cascade (sidecar→envoy→gateway)
