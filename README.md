@@ -15,6 +15,7 @@ What this gets you above the official sandboxed docker compose offering:
 - DNS exfiltration prevention via CoreDNS allowlist proxy — only whitelisted domains resolve, everything else returns NXDOMAIN (forwarded through Cloudflare malware-blocking DNS)
 - Firewall escape hatch — grant the agent temporary full internet access for any one-off destination using a convenient ssh one-liner from your machine (auto-closes after 30s by default; the agent already knows to ask for this when it hits blocked destinations)
 - Auto-injected agent environment prompt — the agent understands its constraints out of the box so it knows when to ask, what to ask, and what options it has at its disposal when it comes to tool use, gateway management, and outbound requests
+- Management CLI (`ocm`) for common operational tasks like restarting containers, viewing container or VPS logs and system health, or opening shells
 
 > Early development — features and conventions may change. Contributions and feedback welcome!
 
@@ -48,7 +49,9 @@ What this gets you above the official sandboxed docker compose offering:
   - [DNS Exfiltration Prevention](#dns-exfiltration-prevention)
   - [Agent Environment Prompt](#agent-environment-prompt)
   - [Docker Hub Build Mode](#docker-hub-build-mode)
+    - [Multi-platform builds](#multi-platform-builds)
   - [Experimental Runtime Binary Persistence](#experimental-runtime-binary-persistence)
+  - [Management CLI (`ocm`)](#management-cli-ocm)
 
 ## Try it: Deploy OpenClaw with Telegram and Private Discord server access
 
@@ -643,3 +646,60 @@ Runtime install workflow (example):
 4. Exit and restart: `docker restart openclaw-<profile>` from the host, or `kill 1` as root inside the container.
 
 Because `/home/node` and `/home/linuxbrew/.linuxbrew` are persistent named volumes, installed binaries and package-manager state persist across container restarts/recreation.
+
+## Management CLI (`ocm`)
+
+A single bash script (`scripts/manage.sh`) providing ergonomic wrappers for day-to-day VPS and container operations. No more manually constructing `ssh root@<ip> docker exec openclaw-gateway-main ...` commands.
+
+**Install globally:**
+
+```bash
+make install    # symlinks scripts/manage.sh → /usr/local/bin/ocm (prompts for sudo)
+make uninstall  # removes the symlink
+```
+
+**First-run setup:**
+
+```bash
+ocm init  # prompts for default stack + profile, saves to scripts/.ocm.conf
+```
+
+**Usage:**
+
+```bash
+ocm status                        # container status for current profile
+ocm logs -f                       # follow gateway logs
+ocm logs envoy -n 100             # last 100 envoy log lines
+ocm restart gateway               # restart just the gateway container
+ocm restart                       # restart all (dependency order: sidecar→envoy→gateway)
+ocm restart envoy                 # restart envoy + gateway (dependency cascade)
+ocm shell                         # bash as node user in gateway
+ocm shell root                    # bash as root in gateway
+ocm shell vps                     # SSH into VPS host as root
+ocm exec -- ls /home/node         # run a command in the gateway
+ocm exec -u root -- whoami        # run as root in the gateway
+ocm run -- openclaw --version     # ephemeral docker run --rm with gateway image
+ocm run -u root -- apt list       # ephemeral run as root
+ocm openclaw config get gateway.port
+ocm stats                         # container CPU, memory, network, block I/O
+ocm health                        # full system health (VPS + disk + memory + containers)
+ocm ts-status                     # tailscale status from sidecar
+ocm bypass 120                    # firewall bypass for 2 minutes
+ocm ps                            # docker ps on VPS
+ocm --stack oracle --profile dev logs -f  # override stack and profile
+```
+
+Stack and profile are resolved from: `--stack`/`--profile` flags, `OCM_STACK`/`OCM_PROFILE` env vars, or defaults in `scripts/.ocm.conf`.
+
+**Makefile targets** (use the same defaults):
+
+```bash
+make status
+make logs FOLLOW=-f
+make logs SERVICE=envoy
+make restart SERVICE=gateway
+make shell TARGET=vps
+make openclaw CMD="config get gateway.port"
+make stats
+make health
+```

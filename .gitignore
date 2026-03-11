@@ -17,6 +17,9 @@ openclaw-docker
 # Claude Code
 .claude/settings.local.json
 
+# ocm defaults
+scripts/.ocm.conf
+
 # Node
 node_modules/
 *.log

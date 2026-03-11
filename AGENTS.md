@@ -59,6 +59,11 @@ Primary goals:
 │   ├── coredns.ts                    # Renders Corefile (DNS allowlist proxy)
 │   ├── bypass.ts                     # Renders firewall-bypass script (root-only SOCKS proxy)
 │   └── agent-prompt.ts              # Renders ocdeploy/AGENTS.md (agent operational constraints)
+├── scripts/
+│   ├── manage.sh                     # ocm CLI — fleet management wrappers (symlinked to /usr/local/bin/ocm)
+│   ├── .ocm.conf                     # Local defaults (git-ignored): stack + profile
+│   └── update-base-digests.sh        # Fetches current multi-arch manifest digests for base images
+├── Makefile                          # Make targets wrapping ocm commands + install/uninstall
 └── tests/
     ├── config.test.ts                # Config types and domain merging
     ├── templates.test.ts             # Dockerfile/entrypoint/sidecar/serve rendering
@@ -345,6 +350,40 @@ These integration-level checks are non-destructive (preview does not modify stat
 
 4. **Neo feedback on failures:** When `pulumi preview` shows unexpected diffs, resource errors, or other failures you cannot immediately diagnose, use the Pulumi `neo-bridge` MCP tool to ask Neo for guidance before attempting fixes. Provide the error output and relevant context.
 5. **Neo code review (required gate):** Before requesting Neo review, **commit and push** your changes so they are available on the remote. Then use the Pulumi `neo-bridge` MCP tool to request a code review from Neo. Provide: the commit hash, branch name, a summary of what was implemented, and the `pulumi preview --diff` output. Neo must approve the changes before proceeding with `pulumi up` or marking work as complete.
+
+## Management CLI (`ocm`)
+
+`scripts/manage.sh` is a bash CLI (`ocm`) providing ergonomic wrappers for day-to-day VPS and container operations. It reads Pulumi stack outputs (server IP) and config (gateway profiles) to construct SSH + Docker commands targeting the correct remote host and containers.
+
+**Install:** `make install` (symlinks to `/usr/local/bin/ocm`). **Config:** `ocm init` saves defaults to `scripts/.ocm.conf` (git-ignored).
+
+**Resolution order** for stack/profile: `--stack`/`--profile` flags → `OCM_STACK`/`OCM_PROFILE` env vars → defaults in `.ocm.conf`.
+
+| Command                      | Description                                                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ocm init`                   | Interactive setup of default stack + profile                                                                                         |
+| `ocm status`                 | Container status (name, uptime, image) for the profile's 3 containers                                                                |
+| `ocm logs [svc] [-f] [-n N]` | Container logs (svc: `gateway`, `envoy`, `sidecar`)                                                                                  |
+| `ocm restart [svc]`          | Dependency-aware restart: `sidecar` cascades to envoy+gateway, `envoy` cascades to gateway, `gateway` restarts alone. Default: `all` |
+| `ocm exec [-u user] [cmd]`   | `docker exec -it` into the gateway (default: bash as node)                                                                           |
+| `ocm run [-u user] <cmd>`    | Ephemeral `docker run --rm` with the gateway image                                                                                   |
+| `ocm shell [target]`         | Shell access — `node` (default), `root`, or `vps` (SSH to host)                                                                      |
+| `ocm openclaw <cmd>`         | Run `openclaw` CLI as node user in the gateway                                                                                       |
+| `ocm stats`                  | Container CPU, memory, network I/O, block I/O                                                                                        |
+| `ocm health`                 | Full system health: VPS uptime, memory, disk, Docker disk, container status + resources                                              |
+| `ocm ts-status`              | `tailscale status` from inside the sidecar                                                                                           |
+| `ocm bypass [seconds]`       | Start firewall-bypass SOCKS proxy (default: 30s timeout)                                                                             |
+| `ocm ps [args]`              | `docker ps` on the VPS host                                                                                                          |
+
+**Conventions for agents editing `manage.sh`:**
+
+- All subcommands are `cmd_<name>()` functions dispatched in the `case` block at the bottom.
+- Container names follow the pattern: `openclaw-gateway-<profile>`, `envoy-<profile>`, `tailscale-<profile>`.
+- Use `_resolve_stack` / `_resolve_profile` before accessing stack/profile-dependent state.
+- SSH and Docker commands go through `_ssh` / `_docker` helpers (handle quoting, host key suppression).
+- `_wait_healthy` polls the container healthcheck after restarts (120s timeout).
+- Color helpers auto-disable when stdout is not a TTY.
+- The `Makefile` wraps ocm commands as Make targets with the same flag forwarding.
 
 ## Out of Scope (Unless Explicitly Requested)
 

@@ -54,6 +54,13 @@ repos:
         types: [ts]
         pass_filenames: false
 
+  # ShellCheck — lint shell scripts
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        args: ["-e", "SC1091"] # ignore sourced file not found (conf file)
+
   # Semgrep — SAST for IaC (uses .semgrep/ + p/security-audit rulesets)
   - repo: local
     hooks:

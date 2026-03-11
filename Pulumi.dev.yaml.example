@@ -97,7 +97,7 @@ config:
         - config set agents.defaults.memorySearch.provider openai
         - 'config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
         - 'config set agents.defaults.memorySearch.remote.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"OPENROUTER_API_KEY\"}"'
-        - config set agents.defaults.memorySearch.model "openai/text-embedding-3-small"
+        - config set agents.defaults.memorySearch.model "google/gemini-embedding-001"
         - config set tools.web.search.provider brave
         - 'config set tools.web.search.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"BRAVE_API_KEY\"}"'
         - 'config set channels.discord.token "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"DISCORD_BOT_TOKEN\"}"'

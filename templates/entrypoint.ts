@@ -27,6 +27,7 @@ set -euo pipefail
 # Tighten config dir permissions (bind mounts inherit host perms, this fixes both sides).
 chown node:node /home/node/.openclaw 2>/dev/null || true
 chmod 700 /home/node/.openclaw 2>/dev/null || true
+chmod 600 /home/node/.openclaw/openclaw.json 2>/dev/null || true
 
 # Fix git safe.directory for linuxbrew repo (volume UID mismatch).
 # Homebrew repos are owned by the linuxbrew user but node runs brew.
