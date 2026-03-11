@@ -86,6 +86,7 @@ RUN mkdir -p /run/sshd && \\
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \\
     sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords yes/' /etc/ssh/sshd_config && \\
     sed -i 's/UsePAM yes/UsePAM no/' /etc/ssh/sshd_config && \\
+    sed -i 's/#PermitUserEnvironment no/PermitUserEnvironment yes/' /etc/ssh/sshd_config && \\
     passwd -d root && \\
     passwd -d node && \\
     ssh-keygen -A && \\

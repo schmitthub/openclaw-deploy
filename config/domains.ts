@@ -4,6 +4,7 @@ import { EgressRule } from "./types";
 export const INFRASTRUCTURE_DOMAINS: EgressRule[] = [
   { dst: "clawhub.com", proto: "tls", action: "allow" },
   { dst: "registry.npmjs.org", proto: "tls", action: "allow" },
+  { dst: "api.search.brave.com", proto: "tls", action: "allow" },
 ];
 
 // AI provider domains — always allowed
