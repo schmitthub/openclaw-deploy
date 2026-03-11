@@ -105,7 +105,13 @@ _ssh() {
 }
 
 _docker() {
-  _ssh docker "$@"
+  # Build a properly quoted command string for remote execution
+  local cmd="docker"
+  local arg
+  for arg in "$@"; do
+    cmd+=" $(printf '%q' "$arg")"
+  done
+  _ssh "$cmd"
 }
 
 _container_name() {
@@ -174,9 +180,9 @@ cmd_status() {
   envoy="$(_container_name envoy)"
   sc="$(_container_name sidecar)"
 
-  printf "${BOLD}Stack:${RESET}   %s\n" "$OCM_STACK"
-  printf "${BOLD}Profile:${RESET} %s\n" "$OCM_PROFILE"
-  printf "${BOLD}VPS IP:${RESET}  %s\n\n" "$(_get_ip)"
+  printf '%bStack:%b   %s\n' "$BOLD" "$RESET" "$OCM_STACK"
+  printf '%bProfile:%b %s\n' "$BOLD" "$RESET" "$OCM_PROFILE"
+  printf '%bVPS IP:%b  %s\n\n' "$BOLD" "$RESET" "$(_get_ip)"
 
   _docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' \
     --filter "name=$gw" --filter "name=$envoy" --filter "name=$sc"
@@ -210,20 +216,60 @@ cmd_logs() {
   _docker "${args[@]}"
 }
 
+_wait_healthy() {
+  local cname="$1"
+  local timeout="${2:-120}"
+  local elapsed=0
+  local interval=2
+  local status
+
+  printf "  Waiting for %s to be healthy..." "$cname"
+  while [[ $elapsed -lt $timeout ]]; do
+    status="$(_docker inspect --format '{{.State.Health.Status}}' "$cname" 2>/dev/null || echo "unknown")"
+    if [[ "$status" == "healthy" ]]; then
+      printf " ${GREEN}healthy${RESET} (%ds)\n" "$elapsed"
+      return 0
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+  printf " ${RED}timeout after %ds (status: %s)${RESET}\n" "$timeout" "$status"
+  return 1
+}
+
+_restart_container() {
+  local cname="$1"
+  _info "Restarting $cname..."
+  _docker restart "$cname"
+  _wait_healthy "$cname" || _die "$cname failed to become healthy"
+}
+
 cmd_restart() {
   _resolve_stack
   _resolve_profile
   local service="${1:-all}"
 
-  if [[ "$service" == "all" ]]; then
-    _info "Restarting all containers for profile '$OCM_PROFILE'..."
-    _docker restart "$(_container_name gateway)" "$(_container_name envoy)" "$(_container_name sidecar)"
-  else
-    local cname
-    cname="$(_container_name "$service")"
-    _info "Restarting $cname..."
-    _docker restart "$cname"
-  fi
+  # Dependency chain: sidecar → envoy → gateway
+  # Restarting upstream requires cascading restarts downstream.
+  case "$service" in
+    all|sidecar|ts)
+      _info "Restarting all containers for profile '$OCM_PROFILE' (dependency order)..."
+      _restart_container "$(_container_name sidecar)"
+      _restart_container "$(_container_name envoy)"
+      _restart_container "$(_container_name gateway)"
+      ;;
+    envoy)
+      _info "Restarting envoy + gateway for profile '$OCM_PROFILE' (dependency order)..."
+      _restart_container "$(_container_name envoy)"
+      _restart_container "$(_container_name gateway)"
+      ;;
+    gateway|gw)
+      _restart_container "$(_container_name gateway)"
+      ;;
+    *)
+      _die "Unknown service '$service'. Use: gateway, envoy, sidecar, all"
+      ;;
+  esac
   _ok "Done."
 }
 
@@ -326,6 +372,47 @@ cmd_bypass() {
   _ssh -t docker exec -it -u root "$cname" firewall-bypass "$duration"
 }
 
+cmd_stats() {
+  _resolve_stack
+  _resolve_profile
+  local gw envoy sc
+  gw="$(_container_name gateway)"
+  envoy="$(_container_name envoy)"
+  sc="$(_container_name sidecar)"
+
+  printf '%bContainer resources:%b\n' "$BOLD" "$RESET"
+  _ssh "docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}' | head -1; docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}' | grep -E '${gw}|${envoy}|${sc}'"
+}
+
+cmd_health() {
+  _resolve_stack
+  _resolve_profile
+
+  printf '%b=== VPS Host ===%b\n' "$BOLD" "$RESET"
+  _ssh "uptime"
+  echo
+
+  printf '%b=== Memory ===%b\n' "$BOLD" "$RESET"
+  _ssh "free -h"
+  echo
+
+  printf '%b=== Disk ===%b\n' "$BOLD" "$RESET"
+  _ssh "df -h / && echo && docker system df"
+  echo
+
+  printf '%b=== Containers ===%b\n' "$BOLD" "$RESET"
+  local gw envoy sc
+  gw="$(_container_name gateway)"
+  envoy="$(_container_name envoy)"
+  sc="$(_container_name sidecar)"
+  _docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' \
+    --filter "name=$gw" --filter "name=$envoy" --filter "name=$sc"
+  echo
+
+  printf '%b=== Container Resources ===%b\n' "$BOLD" "$RESET"
+  _ssh "docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' | head -1; docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' | grep -E '${gw}|${envoy}|${sc}'"
+}
+
 cmd_ps() {
   _resolve_stack
   _docker ps "$@"
@@ -349,11 +436,13 @@ ${BOLD}COMMANDS${RESET}
   init                  Interactive setup of defaults (~/.ocm.conf)
   status                Show container status for the current profile
   logs [svc] [-f]       Container logs (svc: gateway, envoy, sidecar)
-  restart [svc]         Restart container(s) (svc: gateway, envoy, sidecar, all)
+  restart [svc]         Restart with dependency cascade (sidecar→envoy→gateway)
   exec [opts] [cmd]     Exec into gateway (default: bash, -u root for root)
   run [opts] <cmd>      Ephemeral docker run --rm with gateway image
   shell [target]        Shell access (target: node, root, vps)
   openclaw <cmd>        Run openclaw CLI as node user
+  stats                 Container CPU, memory, network, block I/O
+  health                Full system health (VPS host + disk + memory + containers)
   ts-status             Tailscale status from sidecar
   bypass [duration]     Firewall bypass SOCKS proxy (default: 30s)
   ps [args]             Docker ps on VPS
@@ -416,6 +505,8 @@ case "$SUBCOMMAND" in
   run)        cmd_run "$@" ;;
   shell|sh)   cmd_shell "$@" ;;
   openclaw)   cmd_openclaw "$@" ;;
+  stats)      cmd_stats "$@" ;;
+  health)     cmd_health "$@" ;;
   ts-status)  cmd_ts_status "$@" ;;
   bypass)     cmd_bypass "$@" ;;
   ps)         cmd_ps "$@" ;;
