@@ -22,7 +22,7 @@ import type { EgressRule } from "../config/types";
 
 describe("domain registry", () => {
   it("has expected infrastructure domain count", () => {
-    expect(INFRASTRUCTURE_DOMAINS).toHaveLength(2);
+    expect(INFRASTRUCTURE_DOMAINS).toHaveLength(3);
   });
 
   it("has expected AI provider domain count", () => {

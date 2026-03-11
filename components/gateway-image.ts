@@ -223,26 +223,28 @@ export class GatewayImage extends pulumi.ComponentResource {
         );
       });
 
-      // Join per-platform manifests into a single manifest list under the canonical tag.
-      const index = new docker_build.Index(
-        `${name}-index`,
-        {
-          sources: platformBuilds.map((b) => b.ref),
-          tag: remoteTag,
-          registry: {
-            address: "docker.io",
-            username,
-            password: pulumi.secret(password),
-          },
-        },
-        { parent: this, dependsOn: platformBuilds },
-      );
-      image = index;
-      // Use per-platform manifest digests — these change on every push.
-      // index.ref is just the tag string (no digest), useless as a trigger.
+      // Join per-platform manifests into a manifest list under the version + commit tags.
+      // Uses imagetools (no delete semantics — mutable tags are just overwritten).
       imageDigestTrigger = pulumi
         .all(platformBuilds.map((b) => b.digest))
         .apply((digests) => digests.join(","));
+
+      const manifestCreate = pulumi
+        .all(platformBuilds.map((b) => b.ref))
+        .apply(
+          (refs) =>
+            `docker buildx imagetools create -t ${remoteTag} -t ${commitTag} ${refs.join(" ")}`,
+        );
+
+      const manifestList = new command.local.Command(
+        `${name}-manifest`,
+        {
+          create: manifestCreate,
+          triggers: [imageDigestTrigger],
+        },
+        { parent: this, dependsOn: platformBuilds },
+      );
+      image = manifestList;
     } else {
       // Single-platform build (host arch only) — fast, no cross-compilation.
       const singleImage = new docker_build.Image(
@@ -261,6 +263,18 @@ export class GatewayImage extends pulumi.ComponentResource {
       );
       image = singleImage;
       imageDigestTrigger = singleImage.digest;
+    }
+
+    if (!args.multiPlatform) {
+      // Push git SHA tag for single-platform builds (multi-platform applies it in the manifest command).
+      new command.local.Command(
+        `${name}-commit-tag`,
+        {
+          create: `docker buildx imagetools create -t ${commitTag} ${remoteTag}`,
+          triggers: [imageDigestTrigger],
+        },
+        { parent: this, dependsOn: [image] },
+      );
     }
 
     // Pull on VPS via docker.RemoteImage with provider-level registryAuth.
@@ -325,17 +339,6 @@ export class GatewayImage extends pulumi.ComponentResource {
       },
     );
 
-    // Apply commit SHA tag on VPS for traceability (docker images shows which commit built this)
-    new docker.Tag(
-      `${name}-commit-tag`,
-      {
-        sourceImage: pullTag,
-        targetImage: commitTag,
-        tagTriggers: [imageDigestTrigger],
-      },
-      { parent: this, provider: remoteDockerProvider, dependsOn: [pulled] },
-    );
-
     // Prune all images not used by running containers
     new command.remote.Command(
       `${name}-prune`,
@@ -361,7 +364,6 @@ export class GatewayImage extends pulumi.ComponentResource {
     tempDir: string,
   ): { imageName: pulumi.Output<string>; imageDigest: pulumi.Output<string> } {
     const tag = `openclaw-gateway-${args.profile}:${args.version}`;
-    const commitTag = `openclaw-gateway-${args.profile}:${GIT_SHA}`;
 
     pulumi.log.warn(
       [
@@ -395,25 +397,6 @@ export class GatewayImage extends pulumi.ComponentResource {
         buildOnPreview: false,
       },
       { parent: this, provider: buildProvider },
-    );
-
-    // Apply commit SHA tag on VPS for traceability (docker images shows which commit built this)
-    const remoteDockerProvider = new docker.Provider(
-      `${name}-docker-provider`,
-      { host: args.dockerHost },
-      { parent: this },
-    );
-    // image.digest is the SHA256 content hash — changes on every rebuild.
-    // image.ref is just the tag string when push: false (no digest suffix),
-    // so it wouldn't trigger downstream resources on content changes.
-    new docker.Tag(
-      `${name}-commit-tag`,
-      {
-        sourceImage: tag,
-        targetImage: commitTag,
-        tagTriggers: [image.digest],
-      },
-      { parent: this, provider: remoteDockerProvider, dependsOn: [image] },
     );
 
     // Prune all images not used by running containers
