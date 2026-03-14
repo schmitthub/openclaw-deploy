@@ -103,12 +103,7 @@ export class GatewayInit extends pulumi.ComponentResource {
 
       if (validCmds.length === 0) continue;
 
-      const script = validCmds
-        .map(
-          (cmd, i) =>
-            `echo "[init:${groupName} ${i + 1}/${validCmds.length}] ${cmd.replace(/"/g, '\\"')}" && ${cmd}`,
-        )
-        .join("\n");
+      const script = validCmds.join("\n");
       const encoded = Buffer.from(script).toString("base64");
       const groupHash = hashCommands(validCmds);
 

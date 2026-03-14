@@ -125,6 +125,3 @@ config:
           - openclaw config set agents.defaults.model.primary "openrouter/minimax/minimax-m2.5"
           - openclaw config set tools.message.crossContext.allowAcrossProviders true
           - openclaw config set cron.maxConcurrentRuns 2
-      postStartCommands:
-        default:
-          - openclaw system heartbeat disable
