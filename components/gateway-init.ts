@@ -64,11 +64,11 @@ export class GatewayInit extends pulumi.ComponentResource {
       ...Object.keys(envVars),
     ];
 
-    // Full env var map: reserved vars + custom vars. All always available to all commands.
+    // Full env var map: custom vars first, then reserved vars (reserved always win).
     const allEnvOutputs: Record<string, pulumi.Input<string>> = {
+      ...envVars,
       OPENCLAW_GATEWAY_TOKEN: args.gatewayToken,
       TAILSCALE_SERVE_HOST: args.tailscaleHostname,
-      ...envVars,
     };
 
     // Step 1: Create host directories for bind-mounted persistent data

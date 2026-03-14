@@ -58,9 +58,9 @@ export class GatewayPostInit extends pulumi.ComponentResource {
     ];
 
     const allEnvOutputs: Record<string, pulumi.Input<string>> = {
+      ...envVars,
       OPENCLAW_GATEWAY_TOKEN: args.gatewayToken,
       TAILSCALE_SERVE_HOST: args.tailscaleHostname,
-      ...envVars,
     };
 
     // Wait for the gateway to be healthy before running post-start commands
@@ -99,18 +99,6 @@ export class GatewayPostInit extends pulumi.ComponentResource {
       const groupCmdText = validCmds.join("\n");
       const referencedVars = scanReferencedVars(groupCmdText, allVarNames);
 
-      // Environment: all vars available
-      const environment = pulumi
-        .all(
-          Object.fromEntries(
-            Object.entries(allEnvOutputs).map(([k, v]) => [
-              k,
-              pulumi.output(v),
-            ]),
-          ),
-        )
-        .apply((env) => env as Record<string, string>);
-
       // Triggers: group hash + referenced env vars only
       const triggerInputs: pulumi.Input<string>[] = [groupHash];
       for (const varName of referencedVars) {
@@ -120,23 +108,21 @@ export class GatewayPostInit extends pulumi.ComponentResource {
       }
       const triggers = pulumi.all(triggerInputs);
 
-      // docker exec with env vars piped as a script
+      // docker exec inherits the container's environment — all env vars are already
+      // set on the gateway container via gateway.ts envs property.
       const create = pulumi
-        .all([args.containerName, environment] as const)
-        .apply(([containerName, env]) => {
-          const envExports = Object.keys(env)
-            .map((k) => `export ${k}="$${k}"`)
-            .join("; ");
-
-          return `docker exec ${containerName} sh -c '${envExports}; set -e; echo '"'"'${encoded}'"'"' | base64 -d | sh -e'`;
-        });
+        .output(args.containerName)
+        .apply(
+          (containerName) =>
+            `docker exec ${containerName} sh -c 'set -e; echo '"'"'${encoded}'"'"' | base64 -d | sh -e'`,
+        );
 
       const groupResource = new command.remote.Command(
         `${name}-group-${groupName}`,
         {
           connection: args.connection,
           create,
-          environment,
+          logging: command.remote.Logging.None,
           triggers,
         },
         {
@@ -146,7 +132,6 @@ export class GatewayPostInit extends pulumi.ComponentResource {
               ? healthWait
               : groupResources[groupResources.length - 1],
           ],
-          additionalSecretOutputs: ["stdout", "stderr", "environment"],
         },
       );
       groupResources.push(groupResource);

@@ -271,7 +271,7 @@ If all goes well, you now have an operational OpenClaw gateway with Tailscale ac
 ### 7) Post-deploy operational notes
 
 - If you install runtime binaries or change config, restart the gateway container. `openclaw gateway restart` will not work in this deployment model. Use SSH and run: `ssh root@main.yourtsns.ts.net "kill 1"`.
-- To add a domain to the Envoy whitelist, update `egressPolicy` and run `pulumi up` again. Firewall updates only take a few seconds to a minute to propogate.
+- To add a domain to the Envoy whitelist, update `egressPolicy` and run `pulumi up` again. Firewall updates only take a few seconds to a minute to propagate.
 - For one-off downloads without updating the whitelist, SSH in as root and use the firewall bypass: `ssh root@main.yourtsns.ts.net "firewall-bypass 30"`. The proxy runs in the foreground and logs connections in real-time. From another session or from the agent: `proxychains4 -f /run/firewall-bypass-proxychains.conf curl https://example.com/file.tar.gz -o file.tar.gz` or `curl --proxy socks5h://localhost:9100 https://example.com/file.tar.gz -o file.tar.gz`. Your agent will already know about this and will most likely ask you if it can use the bypass when it encounters blocked destinations.
 - If you want a config value to persist across rebuilds, keep it in `preStartCommands`.
 - Removing a `preStartCommands` entry does not unset an already-written OpenClaw config value. Unset it manually, then restart the container.
@@ -579,7 +579,7 @@ Secret env vars are set individually via the `ocm` CLI or `pulumi config set`. E
 # Set env vars (uses default stack + profile from ocm init)
 ocm env set OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
 ocm env set DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
-ocm env set GH_TOKEN "$_GH_TOKEN"          # resolves from shell env
+ocm env set GH_TOKEN "$GH_TOKEN"
 
 # List current keys (values hidden)
 ocm env list

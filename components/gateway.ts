@@ -30,7 +30,7 @@ export interface GatewayArgs {
   imageDigest: pulumi.Input<string>;
 }
 
-// Keys that cannot be overridden via gatewaySecretEnv (set by the component itself)
+// Keys that cannot be overridden via gatewayEnv-<profile>-<KEY> (set by the component itself)
 const RESERVED_ENV_KEYS = new Set(["OPENCLAW_GATEWAY_TOKEN"]);
 
 export class Gateway extends pulumi.ComponentResource {
@@ -79,7 +79,7 @@ export class Gateway extends pulumi.ComponentResource {
       .filter((k) => RESERVED_ENV_KEYS.has(k));
     if (conflicts.length > 0) {
       pulumi.log.warn(
-        `gatewaySecretEnv-${args.profile} contains reserved key(s) that will be ignored: ${conflicts.join(", ")}`,
+        `gatewayEnv-${args.profile}-* contains reserved key(s) that will be ignored: ${conflicts.join(", ")}. Remove with: ${conflicts.map((k) => `pulumi config rm gatewayEnv-${args.profile}-${k}`).join(", ")}`,
         this,
       );
     }
