@@ -6,6 +6,7 @@ import {
   DEFAULT_OPENCLAW_WORKSPACE_DIR,
   dataDir,
 } from "../config";
+import type { CommandGroup } from "../config/types";
 
 export interface GatewayInitArgs {
   /** SSH connection args for remote commands */
@@ -14,8 +15,8 @@ export interface GatewayInitArgs {
   profile: string;
   /** Docker image tag for the gateway (from GatewayImage) */
   imageName: pulumi.Input<string>;
-  /** Pre-start grouped shell commands: { groupName: [cmd, ...] }. One init container per group. */
-  preStartCommands?: Record<string, string[]>;
+  /** Ordered pre-start command groups. One init container per group. */
+  preStartCommands?: CommandGroup[];
   /** Individual secret env vars — each key is a separate Pulumi secret. All are available to all commands. */
   envVars?: Record<string, pulumi.Input<string>>;
   /** Gateway auth token */
@@ -55,7 +56,7 @@ export class GatewayInit extends pulumi.ComponentResource {
 
     const dDir = dataDir(args.profile);
     const envVars = args.envVars ?? {};
-    const groups = args.preStartCommands ?? {};
+    const groups = args.preStartCommands ?? [];
 
     // All available env var names for reference scanning
     const allVarNames = [
@@ -83,17 +84,17 @@ export class GatewayInit extends pulumi.ComponentResource {
     );
 
     // Content hash covers all command text across all groups (for gateway container replacement)
-    const allCmds = Object.values(groups).flat();
+    const allCmds = groups.flatMap((g) => g.commands);
     this.contentHash = hashCommands(allCmds);
 
-    // Step 2: Create one resource per group
+    // Step 2: Create one resource per group in config-defined order
     const groupResources: command.remote.Command[] = [];
 
-    for (const [groupName, cmds] of Object.entries(groups)) {
-      const validCmds = cmds.filter((cmd) => {
+    for (const group of groups) {
+      const validCmds = group.commands.filter((cmd) => {
         if (!cmd.trim()) {
           pulumi.log.warn(
-            `Skipping empty command in group "${groupName}" for gateway ${args.profile}`,
+            `Skipping empty command in group "${group.name}" for gateway ${args.profile}`,
             this,
           );
           return false;
@@ -145,7 +146,7 @@ export class GatewayInit extends pulumi.ComponentResource {
         });
 
       const groupResource = new command.remote.Command(
-        `${name}-group-${groupName}`,
+        `${name}-group-${group.name}`,
         {
           connection: args.connection,
           create,
@@ -160,6 +161,8 @@ export class GatewayInit extends pulumi.ComponentResource {
               : groupResources[groupResources.length - 1],
           ],
           additionalSecretOutputs: ["stdout", "stderr", "environment"],
+          // Don't re-run when only the image tag changes — triggers control re-execution
+          ignoreChanges: ["create", "environment"],
         },
       );
       groupResources.push(groupResource);

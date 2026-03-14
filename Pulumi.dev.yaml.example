@@ -93,35 +93,40 @@ config:
       port: 18789
       installBrowser: true
       preStartCommands:
-        openrouter:
-          - openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health
-          - 'openclaw config set agents.defaults.memorySearch.remote.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"OPENROUTER_API_KEY\"}"'
-        tailscale:
-          - openclaw config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
-        discord:
-          - 'openclaw config set channels.discord.allowFrom "[\"$DISCORD_USER_ID\"]"'
-          - 'openclaw config set channels.discord.guilds "{\"$DISCORD_SERVER_ID\": {\"users\": [\"$DISCORD_USER_ID\"], \"requireMention\": false}}"'
-        telegram:
-          - openclaw config set channels.telegram.allowFrom "[\"$TELEGRAM_USER_ID\"]"
-        default:
-          - openclaw config set gateway.trustedProxies "[\"127.0.0.1/8\"]"
-          - openclaw config set gateway.auth.mode token
-          - openclaw config set gateway.auth.trustedProxy.userHeader tailscale-user-login
-          - openclaw config set gateway.auth.trustedProxy.requiredHeaders "[\"x-forwarded-for\", \"x-forwarded-proto\"]"
-          - openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true
-          - openclaw config set tools.profile full
-          - openclaw config set agents.defaults.userTimezone "America/Los_Angeles"
-          - openclaw config set skills.install.nodeManager pnpm
-          - openclaw config set agents.defaults.memorySearch.provider openai
-          - 'openclaw config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
-          - openclaw config set agents.defaults.memorySearch.model "google/gemini-embedding-001"
-          - openclaw config set tools.web.search.provider brave
-          - 'openclaw config set tools.web.search.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"BRAVE_API_KEY\"}"'
-          - 'openclaw config set channels.discord.token "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"DISCORD_BOT_TOKEN\"}"'
-          - openclaw config set channels.discord.dmPolicy allowlist
-          - openclaw config set channels.discord.groupPolicy allowlist
-          - openclaw config set channels.telegram.botToken "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"TELEGRAM_BOT_TOKEN\"}"
-          - openclaw config set channels.telegram.dmPolicy allowlist
-          - openclaw config set agents.defaults.model.primary "openrouter/minimax/minimax-m2.5"
-          - openclaw config set tools.message.crossContext.allowAcrossProviders true
-          - openclaw config set cron.maxConcurrentRuns 2
+        - name: openrouter
+          commands:
+            - openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health
+            - 'openclaw config set agents.defaults.memorySearch.remote.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"OPENROUTER_API_KEY\"}"'
+        - name: tailscale
+          commands:
+            - openclaw config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
+        - name: discord
+          commands:
+            - 'openclaw config set channels.discord.allowFrom "[\"$DISCORD_USER_ID\"]"'
+            - 'openclaw config set channels.discord.guilds "{\"$DISCORD_SERVER_ID\": {\"users\": [\"$DISCORD_USER_ID\"], \"requireMention\": false}}"'
+        - name: telegram
+          commands:
+            - openclaw config set channels.telegram.allowFrom "[\"$TELEGRAM_USER_ID\"]"
+        - name: default
+          commands:
+            - openclaw config set gateway.trustedProxies "[\"127.0.0.1/8\"]"
+            - openclaw config set gateway.auth.mode token
+            - openclaw config set gateway.auth.trustedProxy.userHeader tailscale-user-login
+            - openclaw config set gateway.auth.trustedProxy.requiredHeaders "[\"x-forwarded-for\", \"x-forwarded-proto\"]"
+            - openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true
+            - openclaw config set tools.profile full
+            - openclaw config set agents.defaults.userTimezone "America/Los_Angeles"
+            - openclaw config set skills.install.nodeManager pnpm
+            - openclaw config set agents.defaults.memorySearch.provider openai
+            - 'openclaw config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
+            - openclaw config set agents.defaults.memorySearch.model "google/gemini-embedding-001"
+            - openclaw config set tools.web.search.provider brave
+            - 'openclaw config set tools.web.search.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"BRAVE_API_KEY\"}"'
+            - 'openclaw config set channels.discord.token "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"DISCORD_BOT_TOKEN\"}"'
+            - openclaw config set channels.discord.dmPolicy allowlist
+            - openclaw config set channels.discord.groupPolicy allowlist
+            - openclaw config set channels.telegram.botToken "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"TELEGRAM_BOT_TOKEN\"}"
+            - openclaw config set channels.telegram.dmPolicy allowlist
+            - openclaw config set agents.defaults.model.primary "openrouter/minimax/minimax-m2.5"
+            - openclaw config set tools.message.crossContext.allowAcrossProviders true
+            - openclaw config set cron.maxConcurrentRuns 2

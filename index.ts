@@ -202,22 +202,23 @@ const gatewayInstances = gateways.map((gw, gwIndex) => {
       connection: server.connection,
       profile: gw.profile,
       imageName: image.imageName,
-      preStartCommands: {
-        // User-defined groups from stack config
-        ...(gw.preStartCommands ?? {}),
-        // System-managed commands appended to default group
-        default: [
-          ...(gw.preStartCommands?.default ?? []),
-          ...(gw.installBrowser
-            ? [
-                "openclaw config set browser.headless true",
-                "openclaw config set browser.noSandbox true",
-              ]
-            : []),
-          "openclaw hooks enable bootstrap-extra-files",
-          "openclaw config set hooks.internal.entries.bootstrap-extra-files.paths '[\"ocdeploy/AGENTS.md\"]'",
-        ],
-      },
+      preStartCommands: [
+        ...(gw.preStartCommands ?? []),
+        // System-managed commands in a dedicated group (always last)
+        {
+          name: "system",
+          commands: [
+            ...(gw.installBrowser
+              ? [
+                  "openclaw config set browser.headless true",
+                  "openclaw config set browser.noSandbox true",
+                ]
+              : []),
+            "openclaw hooks enable bootstrap-extra-files",
+            "openclaw config set hooks.internal.entries.bootstrap-extra-files.paths '[\"ocdeploy/AGENTS.md\"]'",
+          ],
+        },
+      ],
       envVars,
       gatewayToken: token,
       tailscaleHostname: sidecar.tailscaleHostname,
@@ -248,8 +249,8 @@ const gatewayInstances = gateways.map((gw, gwIndex) => {
   );
 
   // Post-start commands (docker exec after gateway is healthy)
-  const postCommands = gw.postStartCommands ?? {};
-  if (Object.keys(postCommands).length > 0) {
+  const postCommands = gw.postStartCommands ?? [];
+  if (postCommands.length > 0) {
     new GatewayPostInit(
       `gateway-post-init-${gw.profile}`,
       {

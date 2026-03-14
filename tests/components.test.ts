@@ -678,12 +678,15 @@ describe("GatewayInit component", () => {
     const init = new GatewayInit("test-init-cmds", {
       ...baseInitArgs,
       profile: "cmdtest",
-      preStartCommands: {
-        default: [
-          'openclaw onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"',
-          "openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true",
-        ],
-      },
+      preStartCommands: [
+        {
+          name: "default",
+          commands: [
+            'openclaw onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"',
+            "openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true",
+          ],
+        },
+      ],
     });
 
     const complete = await promiseOf(init.initComplete);
@@ -695,10 +698,21 @@ describe("GatewayInit component", () => {
     const init = new GatewayInit("test-init-groups", {
       ...baseInitArgs,
       profile: "grouptest",
-      preStartCommands: {
-        config: ["openclaw config set foo bar", "openclaw config set baz qux"],
-        auth: ['openclaw onboard --gateway-token "$OPENCLAW_GATEWAY_TOKEN"'],
-      },
+      preStartCommands: [
+        {
+          name: "config",
+          commands: [
+            "openclaw config set foo bar",
+            "openclaw config set baz qux",
+          ],
+        },
+        {
+          name: "auth",
+          commands: [
+            'openclaw onboard --gateway-token "$OPENCLAW_GATEWAY_TOKEN"',
+          ],
+        },
+      ],
     });
 
     const complete = await promiseOf(init.initComplete);
@@ -710,11 +724,14 @@ describe("GatewayInit component", () => {
     const init = new GatewayInit("test-init-secret", {
       ...baseInitArgs,
       profile: "secrettest",
-      preStartCommands: {
-        auth: [
-          'openclaw onboard --non-interactive --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY"',
-        ],
-      },
+      preStartCommands: [
+        {
+          name: "auth",
+          commands: [
+            'openclaw onboard --non-interactive --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY"',
+          ],
+        },
+      ],
       envVars: { OPENROUTER_API_KEY: "sk-or-test-123" },
     });
 
@@ -727,12 +744,16 @@ describe("GatewayInit component", () => {
     const init1 = new GatewayInit("test-init-hash1", {
       ...baseInitArgs,
       profile: "hash1",
-      preStartCommands: { default: ["openclaw config set foo bar"] },
+      preStartCommands: [
+        { name: "default", commands: ["openclaw config set foo bar"] },
+      ],
     });
     const init2 = new GatewayInit("test-init-hash2", {
       ...baseInitArgs,
       profile: "hash2",
-      preStartCommands: { default: ["openclaw config set baz qux"] },
+      preStartCommands: [
+        { name: "default", commands: ["openclaw config set baz qux"] },
+      ],
     });
 
     expect(init1.contentHash).toBeDefined();
@@ -745,12 +766,18 @@ describe("GatewayInit component", () => {
     const init = new GatewayInit("test-init-scan", {
       ...baseInitArgs,
       profile: "scantest",
-      preStartCommands: {
-        "tailscale-serve": [
-          "openclaw config set gateway.controlUi.allowedOrigins '[\"https://$TAILSCALE_SERVE_HOST\"]'",
-        ],
-        default: ["openclaw config set tools.profile full"],
-      },
+      preStartCommands: [
+        {
+          name: "tailscale-serve",
+          commands: [
+            "openclaw config set gateway.controlUi.allowedOrigins '[\"https://$TAILSCALE_SERVE_HOST\"]'",
+          ],
+        },
+        {
+          name: "default",
+          commands: ["openclaw config set tools.profile full"],
+        },
+      ],
     });
 
     const complete = await promiseOf(init.initComplete);
@@ -762,13 +789,27 @@ describe("GatewayInit component", () => {
     const init = new GatewayInit("test-init-multi", {
       ...baseInitArgs,
       profile: "multitest",
-      preStartCommands: {
-        auth: ['openclaw onboard --gateway-token "$OPENCLAW_GATEWAY_TOKEN"'],
-        config: ["openclaw config set foo bar", "openclaw config set baz qux"],
-        discord: [
-          'openclaw config set channels.discord.allowFrom "[$DISCORD_USER_ID]"',
-        ],
-      },
+      preStartCommands: [
+        {
+          name: "auth",
+          commands: [
+            'openclaw onboard --gateway-token "$OPENCLAW_GATEWAY_TOKEN"',
+          ],
+        },
+        {
+          name: "config",
+          commands: [
+            "openclaw config set foo bar",
+            "openclaw config set baz qux",
+          ],
+        },
+        {
+          name: "discord",
+          commands: [
+            'openclaw config set channels.discord.allowFrom "[$DISCORD_USER_ID]"',
+          ],
+        },
+      ],
       envVars: { DISCORD_USER_ID: "123456" },
     });
 

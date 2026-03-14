@@ -1,6 +1,7 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as command from "@pulumi/command";
 import * as crypto from "crypto";
+import type { CommandGroup } from "../config/types";
 
 export interface GatewayPostInitArgs {
   /** SSH connection args for remote commands */
@@ -11,8 +12,8 @@ export interface GatewayPostInitArgs {
   containerName: pulumi.Input<string>;
   /** Gateway port for healthcheck */
   port: number;
-  /** Post-start grouped shell commands: { groupName: [cmd, ...] } */
-  postStartCommands: Record<string, string[]>;
+  /** Ordered post-start command groups */
+  postStartCommands: CommandGroup[];
   /** Individual secret env vars — all available to all commands */
   envVars?: Record<string, pulumi.Input<string>>;
   /** Gateway auth token */
@@ -74,14 +75,14 @@ export class GatewayPostInit extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Create one resource per group, executed via docker exec
+    // Create one resource per group in config-defined order, executed via docker exec
     const groupResources: command.remote.Command[] = [];
 
-    for (const [groupName, cmds] of Object.entries(groups)) {
-      const validCmds = cmds.filter((cmd) => {
+    for (const group of groups) {
+      const validCmds = group.commands.filter((cmd) => {
         if (!cmd.trim()) {
           pulumi.log.warn(
-            `Skipping empty post-start command in group "${groupName}" for gateway ${args.profile}`,
+            `Skipping empty post-start command in group "${group.name}" for gateway ${args.profile}`,
             this,
           );
           return false;
@@ -118,11 +119,10 @@ export class GatewayPostInit extends pulumi.ComponentResource {
         );
 
       const groupResource = new command.remote.Command(
-        `${name}-group-${groupName}`,
+        `${name}-group-${group.name}`,
         {
           connection: args.connection,
           create,
-          logging: command.remote.Logging.None,
           triggers,
         },
         {
@@ -132,6 +132,8 @@ export class GatewayPostInit extends pulumi.ComponentResource {
               ? healthWait
               : groupResources[groupResources.length - 1],
           ],
+          // Don't re-run when only the container name changes — triggers control re-execution
+          ignoreChanges: ["create"],
         },
       );
       groupResources.push(groupResource);

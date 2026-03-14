@@ -24,6 +24,12 @@ export interface ImageStep {
   run: string;
 }
 
+// Ordered command group for init/post-init containers
+export interface CommandGroup {
+  name: string; // group identifier (used in Pulumi resource names)
+  commands: string[]; // shell commands to run sequentially
+}
+
 // Gateway configuration
 export interface GatewayConfig {
   profile: string; // unique name for this gateway instance
@@ -31,8 +37,8 @@ export interface GatewayConfig {
   port: number; // gateway port inside container
   installBrowser?: boolean; // bake Playwright + Chromium (~300MB)
   imageSteps?: ImageStep[]; // custom Dockerfile RUN instructions
-  preStartCommands?: Record<string, string[]>; // pre-start grouped shell commands: { groupName: [cmd, ...] }
-  postStartCommands?: Record<string, string[]>; // post-start grouped shell commands (docker exec after gateway healthy)
+  preStartCommands?: CommandGroup[]; // ordered pre-start grouped shell commands (one init container per group)
+  postStartCommands?: CommandGroup[]; // ordered post-start grouped shell commands (docker exec after gateway healthy)
   env?: Record<string, string>; // additional env vars for container
 }
 
