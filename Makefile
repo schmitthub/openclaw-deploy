@@ -11,7 +11,7 @@ CMD ?=
 # Build OCM flags from Make variables
 _OCM_FLAGS := $(if $(STACK),--stack $(STACK)) $(if $(PROFILE),--profile $(PROFILE))
 
-## update-digests: Fetch current multi-arch manifest digests and update config/defaults.ts
+## update-digests: Fetch current multi-arch manifest digests and write config/digests.ts
 update-digests:
 	@./scripts/update-base-digests.sh
 
