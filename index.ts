@@ -11,6 +11,7 @@ import {
   EnvoyProxy,
   GatewayInit,
   Gateway,
+  GatewayPostInit,
 } from "./components";
 import {
   validateHetznerConfig,
@@ -131,7 +132,18 @@ const gatewayInstances = gateways.map((gw, gwIndex) => {
   );
   const token = manualToken ?? generatedToken.result;
 
-  const secretEnv = cfg.getSecret(`gatewaySecretEnv-${gw.profile}`);
+  // Scan config for individual env vars: gatewayEnv-<profile>-<KEY>
+  const envVarPrefix = `openclaw-deploy:gatewayEnv-${gw.profile}-`;
+  const allConfig = pulumi.runtime.allConfig();
+  const envVars: Record<string, pulumi.Output<string>> = {};
+  for (const fullKey of Object.keys(allConfig)) {
+    if (fullKey.startsWith(envVarPrefix)) {
+      const varName = fullKey.slice(envVarPrefix.length);
+      envVars[varName] = cfg.requireSecret(
+        `gatewayEnv-${gw.profile}-${varName}`,
+      );
+    }
+  }
 
   // Build image: Docker Hub (dockerhubPush: true) or on-VPS via SSH (default).
   const image = new GatewayImage(
@@ -183,26 +195,31 @@ const gatewayInstances = gateways.map((gw, gwIndex) => {
     { dependsOn: [sidecar, envoy] },
   );
 
-  // Init containers (sequential config, needs hostname + image + envoy healthy)
+  // Init containers (grouped config, needs hostname + image + envoy healthy)
   const init = new GatewayInit(
     `gateway-init-${gw.profile}`,
     {
       connection: server.connection,
       profile: gw.profile,
       imageName: image.imageName,
-      setupCommands: [
-        ...(gw.installBrowser
-          ? [
-              "config set browser.headless true",
-              "config set browser.noSandbox true",
-            ]
-          : []),
-        ...(gw.setupCommands ?? []),
-        // Force agent constraints into context via bootstrap-extra-files hook
-        "hooks enable bootstrap-extra-files",
-        "config set hooks.internal.entries.bootstrap-extra-files.paths '[\"ocdeploy/AGENTS.md\"]'",
+      preStartCommands: [
+        ...(gw.preStartCommands ?? []),
+        // System-managed commands in a dedicated group (always last)
+        {
+          name: "system",
+          commands: [
+            ...(gw.installBrowser
+              ? [
+                  "openclaw config set browser.headless true",
+                  "openclaw config set browser.noSandbox true",
+                ]
+              : []),
+            "openclaw hooks enable bootstrap-extra-files",
+            "openclaw config set hooks.internal.entries.bootstrap-extra-files.paths '[\"ocdeploy/AGENTS.md\"]'",
+          ],
+        },
       ],
-      secretEnv,
+      envVars,
       gatewayToken: token,
       tailscaleHostname: sidecar.tailscaleHostname,
     },
@@ -222,7 +239,7 @@ const gatewayInstances = gateways.map((gw, gwIndex) => {
       tailscaleHostname: sidecar.tailscaleHostname,
       corefilePath: envoy.corefilePath,
       env: gw.env,
-      secretEnv,
+      envVars,
       auth: { mode: "token", token },
       initHash: init.contentHash,
       configHash: envoy.configHash,
@@ -230,6 +247,25 @@ const gatewayInstances = gateways.map((gw, gwIndex) => {
     },
     { dependsOn: [envoyProxy, init] },
   );
+
+  // Post-start commands (docker exec after gateway is healthy)
+  const postCommands = gw.postStartCommands ?? [];
+  if (postCommands.length > 0) {
+    new GatewayPostInit(
+      `gateway-post-init-${gw.profile}`,
+      {
+        connection: server.connection,
+        profile: gw.profile,
+        containerName: `openclaw-gateway-${gw.profile}`,
+        port: gw.port,
+        postStartCommands: postCommands,
+        envVars,
+        gatewayToken: token,
+        tailscaleHostname: sidecar.tailscaleHostname,
+      },
+      { dependsOn: [gateway] },
+    );
+  }
 
   // Prune unused images AFTER the gateway container is replaced.
   // This must run after Gateway (not after GatewayImage) because the old container

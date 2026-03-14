@@ -20,7 +20,8 @@ export interface GatewayArgs {
   /** Host path to the Corefile (CoreDNS allowlist config) */
   corefilePath: pulumi.Input<string>;
   env?: Record<string, string>;
-  secretEnv?: pulumi.Input<string>;
+  /** Individual secret env vars — each key is a separate Pulumi secret */
+  envVars?: Record<string, pulumi.Input<string>>;
   auth: { mode: "token"; token: pulumi.Input<string> };
   initHash: string;
   /** Hash of rendered configs (envoy.yaml + Corefile) — triggers container replacement on policy change */
@@ -29,7 +30,7 @@ export interface GatewayArgs {
   imageDigest: pulumi.Input<string>;
 }
 
-// Keys that cannot be overridden via gatewaySecretEnv (set by the component itself)
+// Keys that cannot be overridden via gatewayEnv-<profile>-<KEY> (set by the component itself)
 const RESERVED_ENV_KEYS = new Set(["OPENCLAW_GATEWAY_TOKEN"]);
 
 export class Gateway extends pulumi.ComponentResource {
@@ -71,36 +72,24 @@ export class Gateway extends pulumi.ComponentResource {
       ...Object.entries(args.env ?? {}).map(([k, v]) => `${k}=${v}`),
     ];
 
-    // Parse secretEnv JSON, filter reserved keys, warn on conflicts
+    // Merge base envs with individual secret env vars, filtering reserved keys
+    const secretEntries = Object.entries(args.envVars ?? {});
+    const conflicts = secretEntries
+      .map(([k]) => k)
+      .filter((k) => RESERVED_ENV_KEYS.has(k));
+    if (conflicts.length > 0) {
+      pulumi.log.warn(
+        `gatewayEnv-${args.profile}-* contains reserved key(s) that will be ignored: ${conflicts.join(", ")}. Remove with: ${conflicts.map((k) => `pulumi config rm gatewayEnv-${args.profile}-${k}`).join(", ")}`,
+        this,
+      );
+    }
+    const secretEnvOutputs = secretEntries
+      .filter(([k]) => !RESERVED_ENV_KEYS.has(k))
+      .map(([k, v]) => pulumi.interpolate`${k}=${v}`);
+
     const computedEnvs = pulumi
-      .all([pulumi.all(envs), pulumi.output(args.secretEnv ?? "{}")])
-      .apply(([baseEnvs, secretJson]) => {
-        let secrets: Record<string, string>;
-        try {
-          secrets = JSON.parse(secretJson) as Record<string, string>;
-        } catch (e) {
-          const detail = e instanceof Error ? e.message : String(e);
-          throw new Error(
-            `Invalid JSON in gatewaySecretEnv-${args.profile}: ${detail}. Expected {"KEY":"value",...}`,
-            { cause: e },
-          );
-        }
-        const conflicts = Object.keys(secrets).filter((k) =>
-          RESERVED_ENV_KEYS.has(k),
-        );
-        if (conflicts.length > 0) {
-          pulumi.log.warn(
-            `gatewaySecretEnv-${args.profile} contains reserved key(s) that will be ignored: ${conflicts.join(", ")}`,
-            this,
-          );
-        }
-        return [
-          ...baseEnvs,
-          ...Object.entries(secrets)
-            .filter(([k]) => !RESERVED_ENV_KEYS.has(k))
-            .map(([k, v]) => `${k}=${v}`),
-        ];
-      });
+      .all([pulumi.all(envs), pulumi.all(secretEnvOutputs)])
+      .apply(([baseEnvs, secretEnvs]) => [...baseEnvs, ...secretEnvs]);
 
     const container = new docker.Container(
       `${name}-container`,

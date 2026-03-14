@@ -23,8 +23,9 @@ config:
     - profile: dev
       version: latest
       port: 18789
-      setupCommands:
-        - 'onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"'
+      preStartCommands:
+        default:
+          - 'openclaw onboard --non-interactive --mode local --gateway-token "$OPENCLAW_GATEWAY_TOKEN"'
   # openclaw-deploy:dockerhubPush: true  # Optional: build locally + push to Docker Hub
   # openclaw-deploy:multiPlatform: true  # Optional: build amd64 + arm64 (requires dockerhubPush + platform)
   # openclaw-deploy:platform: linux/amd64  # Required when multiPlatform is true (e.g. linux/amd64, linux/arm64)
@@ -52,7 +53,7 @@ cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 ## Secret Handling
 - Required secret: `tailscaleAuthKey` — use `cfg.requireSecret()`
 - Auto-generated: `gatewayToken-<profile>` — use `cfg.getSecret()` with `random.RandomPassword` fallback (32 chars, stored in Pulumi state)
-- Optional secret: `gatewaySecretEnv-<profile>` — use `cfg.getSecret()` (returns undefined if absent)
+- Individual secret env vars: `gatewayEnv-<profile>-<KEY>` — discovered via `pulumi.runtime.allConfig()` prefix scanning, read via `cfg.requireSecret()`
 - Remote commands that receive secrets use `logging: "none"` and `additionalSecretOutputs: ["stdout", "stderr"]`
 - Secret values are encrypted in stack config files and never appear in plaintext logs
 
@@ -70,10 +71,11 @@ Components accept typed args interfaces (5 per gateway, plus shared infra):
 - `GatewayImageArgs`: connection, dockerHost, profile, version, installBrowser?, imageSteps?, dockerhubPush?, multiPlatform?, platform?
 - `TailscaleSidecarArgs`: connection, dockerHost, profile, port, tailscaleAuthKey, tcpPortMappings?
 - `EnvoyProxyArgs`: connection, dockerHost, sidecarContainerName, envoyConfigPath, envoyConfigHash, inspectedDomains, profile
-- `GatewayInitArgs`: connection, profile, imageName, setupCommands?, secretEnv?, gatewayToken, tailscaleHostname
-- `GatewayArgs`: dockerHost, profile, port, imageName, sidecarContainerName, tailscaleHostname, corefilePath, env?, secretEnv?, auth, initHash, configHash, imageDigest
+- `GatewayInitArgs`: connection, profile, imageName, preStartCommands?, envVars?, gatewayToken, tailscaleHostname
+- `GatewayPostInitArgs`: connection, profile, containerName, port, postStartCommands, envVars?, gatewayToken, tailscaleHostname
+- `GatewayArgs`: dockerHost, profile, port, imageName, sidecarContainerName, tailscaleHostname, corefilePath, env?, envVars?, auth, initHash, configHash, imageDigest
 
-Security-critical gateway config keys (`gateway.mode`, `gateway.auth.*`, `gateway.trustedProxies`, `discovery.mdns.mode`) are set by `GatewayInit` and **cannot be overridden** by user `setupCommands`.
+Security-critical gateway config keys (`gateway.mode`, `gateway.auth.*`, `gateway.trustedProxies`, `discovery.mdns.mode`) are set by `GatewayInit` and **cannot be overridden** by user `preStartCommands`.
 
 ## Connection Model
 All components use the **public IP** from `server.connection` for SSH commands. Tailscale runs inside sidecar containers (not on the host), so there is no Tailscale IP switching. The `tailscaleAuthKey` is passed to `TailscaleSidecar` which injects it as the `TS_AUTHKEY` env var on the sidecar container. Reusable auth keys are recommended for multi-gateway setups.

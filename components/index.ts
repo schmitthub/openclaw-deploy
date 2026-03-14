@@ -6,4 +6,5 @@ export { TailscaleSidecar, TailscaleSidecarArgs } from "./tailscale-sidecar";
 export { EnvoyProxy, EnvoyProxyArgs } from "./envoy-proxy";
 export { GatewayInit, GatewayInitArgs } from "./gateway-init";
 export { Gateway, GatewayArgs } from "./gateway";
+export { GatewayPostInit, GatewayPostInitArgs } from "./gateway-post-init";
 export { OciInfra, OciInfraArgs } from "./oci-infra";

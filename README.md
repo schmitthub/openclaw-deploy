@@ -45,6 +45,9 @@ What this gets you above the official sandboxed docker compose offering:
   - [Stack Configuration](#stack-configuration)
   - [Component Hierarchy](#component-hierarchy)
   - [Egress Domain Whitelist](#egress-domain-whitelist)
+  - [Pre-Start Command Groups](#pre-start-command-groups)
+  - [Post-Start Commands](#post-start-commands)
+  - [Secret Environment Variables](#secret-environment-variables)
   - [Firewall Bypass (SOCKS Proxy)](#firewall-bypass-socks-proxy)
   - [DNS Exfiltration Prevention](#dns-exfiltration-prevention)
   - [Agent Environment Prompt](#agent-environment-prompt)
@@ -229,8 +232,15 @@ pulumi config set --stack openclaw --secret hcloud:token $HCLOUD_TOKEN
 # Tailscale auth key used inside the gateway container
 pulumi config set --secret tailscaleAuthKey $TS_AUTHKEY
 
-# Secret env passed to setupCommands and runtime container env
-pulumi config set --secret gatewaySecretEnv-main "{\"OPENROUTER_API_KEY\":\"$OPENROUTER_API_KEY\",\"BRAVE_API_KEY\":\"$BRAVE_API_KEY\",\"DISCORD_BOT_TOKEN\":\"$DISCORD_BOT_TOKEN\",\"DISCORD_USER_ID\":\"$DISCORD_USER_ID\",\"DISCORD_SERVER_ID\":\"$DISCORD_SERVER_ID\",\"TELEGRAM_BOT_TOKEN\":\"$TELEGRAM_BOT_TOKEN\",\"TELEGRAM_USER_ID\":\"$TELEGRAM_USER_ID\"}"
+# Secret env vars — each is individually tracked and triggers only affected command groups
+pulumi config set --secret gatewayEnv-main-OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+pulumi config set --secret gatewayEnv-main-BRAVE_API_KEY "$BRAVE_API_KEY"
+pulumi config set --secret gatewayEnv-main-DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
+pulumi config set --secret gatewayEnv-main-DISCORD_USER_ID "$DISCORD_USER_ID"
+pulumi config set --secret gatewayEnv-main-DISCORD_SERVER_ID "$DISCORD_SERVER_ID"
+pulumi config set --secret gatewayEnv-main-TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN"
+pulumi config set --secret gatewayEnv-main-TELEGRAM_USER_ID "$TELEGRAM_USER_ID"
+pulumi config set --secret gatewayEnv-main-GH_TOKEN "$GH_TOKEN"
 ```
 
 ### 6) Deploy and verify
@@ -261,10 +271,10 @@ If all goes well, you now have an operational OpenClaw gateway with Tailscale ac
 ### 7) Post-deploy operational notes
 
 - If you install runtime binaries or change config, restart the gateway container. `openclaw gateway restart` will not work in this deployment model. Use SSH and run: `ssh root@main.yourtsns.ts.net "kill 1"`.
-- To add a domain to the Envoy whitelist, update `egressPolicy` and run `pulumi up` again. Firewall updates only take a few seconds to a minute to propogate.
+- To add a domain to the Envoy whitelist, update `egressPolicy` and run `pulumi up` again. Firewall updates only take a few seconds to a minute to propagate.
 - For one-off downloads without updating the whitelist, SSH in as root and use the firewall bypass: `ssh root@main.yourtsns.ts.net "firewall-bypass 30"`. The proxy runs in the foreground and logs connections in real-time. From another session or from the agent: `proxychains4 -f /run/firewall-bypass-proxychains.conf curl https://example.com/file.tar.gz -o file.tar.gz` or `curl --proxy socks5h://localhost:9100 https://example.com/file.tar.gz -o file.tar.gz`. Your agent will already know about this and will most likely ask you if it can use the bypass when it encounters blocked destinations.
-- If you want a config value to persist across rebuilds, keep it in `setupCommands`.
-- Removing a `setupCommands` entry does not unset an already-written OpenClaw config value. Unset it manually, then restart the container.
+- If you want a config value to persist across rebuilds, keep it in `preStartCommands`.
+- Removing a `preStartCommands` entry does not unset an already-written OpenClaw config value. Unset it manually, then restart the container.
 
 ## Architecture
 
@@ -408,34 +418,35 @@ pulumi up
 
 Configuration lives in `Pulumi.<stack>.yaml`. See `Pulumi.dev.yaml.example` for a complete example.
 
-| Key                          | Type                                          | Required | Description                                                                            |
-| ---------------------------- | --------------------------------------------- | -------- | -------------------------------------------------------------------------------------- |
-| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                                           |
-| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                                     |
-| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                                        |
-| `sshKeyId`                   | string                                        | no       | SSH key ID at provider (auto-generated if omitted)                                     |
-| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                                            |
-| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                              |
-| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                                       |
-| `dockerhubPush`              | boolean                                       | no       | Build locally and push to Docker Hub (default: `false`)                                |
-| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: `false`)                |
-| `platform`                   | string                                        | no       | Docker platform of the VPS (e.g. `linux/amd64`). Required when `multiPlatform` is true |
-| `autoUpdate`                 | boolean                                       | no       | Enable automatic security updates via `unattended-upgrades` (default: `false`)         |
-| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (see below)                                                   |
-| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                        |
-| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` env vars for init + runtime                                     |
+| Key                          | Type                                          | Required | Description                                                                              |
+| ---------------------------- | --------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                                             |
+| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                                       |
+| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                                          |
+| `sshKeyId`                   | string                                        | no       | SSH key ID at provider (auto-generated if omitted)                                       |
+| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                                              |
+| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                                |
+| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                                         |
+| `dockerhubPush`              | boolean                                       | no       | Build locally and push to Docker Hub (default: `false`)                                  |
+| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: `false`)                  |
+| `platform`                   | string                                        | no       | Docker platform of the VPS (e.g. `linux/amd64`). Required when `multiPlatform` is true   |
+| `autoUpdate`                 | boolean                                       | no       | Enable automatic security updates via `unattended-upgrades` (default: `false`)           |
+| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (see below)                                                     |
+| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                          |
+| `gatewayEnv-<profile>-<KEY>` | secret                                        | no       | Individual secret env var for init + runtime (e.g. `gatewayEnv-main-OPENROUTER_API_KEY`) |
 
 **Gateway profile fields:**
 
-| Field            | Type        | Description                                                                   |
-| ---------------- | ----------- | ----------------------------------------------------------------------------- |
-| `profile`        | string      | Unique name (used in resource names)                                          |
-| `version`        | string      | OpenClaw version (`latest` or semver)                                         |
-| `port`           | number      | Gateway port (e.g. `18789`)                                                   |
-| `installBrowser` | boolean     | Install Chromium + Xvfb; auto-sets `browser.headless` and `browser.noSandbox` |
-| `imageSteps`     | ImageStep[] | Custom Dockerfile RUN instructions (`{run}` pairs, always root)               |
-| `setupCommands`  | string[]    | OpenClaw subcommands run in init container (e.g. `onboard`)                   |
-| `env`            | object      | Extra environment variables                                                   |
+| Field               | Type                       | Description                                                                                                  |
+| ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `profile`           | string                     | Unique name (used in resource names)                                                                         |
+| `version`           | string                     | OpenClaw version (`latest` or semver)                                                                        |
+| `port`              | number                     | Gateway port (e.g. `18789`)                                                                                  |
+| `installBrowser`    | boolean                    | Install Chromium + Xvfb; auto-sets `browser.headless` and `browser.noSandbox`                                |
+| `imageSteps`        | ImageStep[]                | Custom Dockerfile RUN instructions (`{run}` pairs, always root)                                              |
+| `preStartCommands`  | `Record<string, string[]>` | Grouped shell commands run before gateway starts (see [Pre-Start Command Groups](#pre-start-command-groups)) |
+| `postStartCommands` | `Record<string, string[]>` | Grouped shell commands run after gateway is healthy (via `docker exec`)                                      |
+| `env`               | object                     | Extra environment variables                                                                                  |
 
 **Hetzner-specific options** (`hetzner`):
 
@@ -509,6 +520,78 @@ openclaw-deploy:egressPolicy:
 ```
 
 SSH/TCP rules use per-rule port mapping: each rule gets a dedicated Envoy listener port (starting from 10001), and destination-specific iptables REDIRECT rules in the sidecar entrypoint route matching traffic to the correct port. Domain resolution happens at container startup.
+
+## Pre-Start Command Groups
+
+Pre-start commands (`preStartCommands`) run in ephemeral init containers before the gateway starts. Commands are organized by **group** — each group runs in a single container (one Node.js cold start per group).
+
+**Why grouping matters:** Each init container boots a full Node.js runtime (~2 min cold start on node:24). Without grouping, 30 commands = 30 cold starts = 60+ minutes. With 5 groups, that's 5 cold starts = ~10 minutes on first deploy. On subsequent deploys, only groups with changed commands or env vars re-run.
+
+**Env var tracking:** Commands can reference env vars set via `pulumi config set --secret gatewayEnv-<profile>-<KEY>`. The system scans each group's command text for `$VAR` references and only includes those vars in the group's Pulumi triggers. When a secret rotates, only groups that reference it re-run — unrelated groups are untouched.
+
+**Grouping strategy:** Group commands by what logically changes together. For example, Discord config commands that reference `$DISCORD_BOT_TOKEN` and `$DISCORD_USER_ID` should share a group. General config commands that don't reference any secrets can go in `default`.
+
+```yaml
+preStartCommands:
+  # Auth commands — re-runs when OPENROUTER_API_KEY or OPENCLAW_GATEWAY_TOKEN changes
+  openrouter-api-key:
+    - openclaw onboard ... --openrouter-api-key "$OPENROUTER_API_KEY"
+    - "openclaw config set agents.defaults.memorySearch.remote.apiKey ..."
+
+  # Tailscale-dependent — re-runs when hostname changes
+  tailscale-serve:
+    - openclaw config set gateway.controlUi.allowedOrigins ... "$TAILSCALE_SERVE_HOST" ...
+
+  # Discord — re-runs when any DISCORD_* env var changes
+  discord:
+    - 'openclaw config set channels.discord.token ... "$DISCORD_BOT_TOKEN" ...'
+    - 'openclaw config set channels.discord.allowFrom "[$DISCORD_USER_ID]"'
+
+  # Static config — only re-runs when command text changes
+  default:
+    - openclaw config set gateway.auth.mode token
+    - openclaw config set tools.profile full
+```
+
+Group names are arbitrary strings — they have no meaning to the system beyond bucketing commands that run together.
+
+Built-in env vars available to all commands (no config needed): `OPENCLAW_GATEWAY_TOKEN`, `TAILSCALE_SERVE_HOST`. Custom env vars are set individually via `ocm env set <KEY> <VALUE>` or `pulumi config set --secret gatewayEnv-<profile>-<KEY> <value>`.
+
+## Post-Start Commands
+
+Post-start commands (`postStartCommands`) run via `docker exec` after the gateway container is healthy. They use the same grouped `Record<string, string[]>` format as pre-start commands, with the same env var scanning and trigger behavior.
+
+Use post-start for commands that need a running gateway process — for example, `openclaw system heartbeat disable` talks to the gateway's local API and fails if the gateway isn't running.
+
+```yaml
+postStartCommands:
+  default:
+    - openclaw system heartbeat disable
+```
+
+The system waits for the gateway's `/healthz` endpoint to respond (30s timeout) before executing any post-start commands.
+
+## Secret Environment Variables
+
+Secret env vars are set individually via the `ocm` CLI or `pulumi config set`. Each var is its own encrypted entry in the stack config — no JSON blobs.
+
+```bash
+# Set env vars (uses default stack + profile from ocm init)
+ocm env set OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+ocm env set DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
+ocm env set GH_TOKEN "$GH_TOKEN"
+
+# List current keys (values hidden)
+ocm env list
+
+# Remove a key
+ocm env delete OLD_KEY
+
+# Override stack/profile
+ocm --profile dev env set CUSTOM_KEY "value"
+```
+
+All env vars are available to all commands in all groups. The system scans command text for `$VAR` references to determine which env var changes should trigger which groups to re-run. Env vars that aren't referenced in any command (e.g. `GH_TOKEN`) are still available at runtime — they just don't trigger any init re-runs when rotated.
 
 ## Firewall Bypass (SOCKS Proxy)
 
@@ -684,6 +767,9 @@ ocm openclaw config get gateway.port
 ocm stats                         # container CPU, memory, network, block I/O
 ocm health                        # full system health (VPS + disk + memory + containers)
 ocm ts-status                     # tailscale status from sidecar
+ocm env set KEY "$VALUE"          # set a secret env var for current profile
+ocm env list                      # list env var keys (values hidden)
+ocm env delete KEY                # remove an env var
 ocm bypass 120                    # firewall bypass for 2 minutes
 ocm ps                            # docker ps on VPS
 ocm --stack oracle --profile dev logs -f  # override stack and profile

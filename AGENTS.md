@@ -42,7 +42,8 @@ Primary goals:
 │   ├── gateway-image.ts              # GatewayImage: BuildKit image build via @pulumi/docker-build
 │   ├── tailscale-sidecar.ts          # TailscaleSidecar: bridge network + sidecar + health + hostname
 │   ├── envoy-proxy.ts                # EnvoyProxy: envoy container + health wait
-│   ├── gateway-init.ts               # GatewayInit: sequential init containers + env var scanning
+│   ├── gateway-init.ts               # GatewayInit: grouped pre-start init containers + env var scanning
+│   ├── gateway-post-init.ts          # GatewayPostInit: grouped post-start commands via docker exec
 │   └── gateway.ts                    # Gateway: container-only (volumes + gateway container)
 ├── config/
 │   ├── index.ts                      # Re-exports
@@ -85,22 +86,23 @@ EnvoyEgress (shared config rendering + cert generation — no Docker resources)
   ↓ envoyConfigPath, configHash, inspectedDomains, tcpPortMappings
   ↓
 Per gateway (1+ per server):
-  GatewayImage ──→ TailscaleSidecar ──→ EnvoyProxy ──→ GatewayInit ──→ Gateway
+  GatewayImage ──→ TailscaleSidecar ──→ EnvoyProxy ──→ GatewayInit ──→ Gateway ──→ GatewayPostInit
   (build)          (netns + auth)        (egress)       (config)        (container)
 ```
 
-`GatewayImage` and `TailscaleSidecar` can run in parallel (independent). `EnvoyProxy` waits for sidecar + envoy config. `GatewayInit` waits for image + envoy proxy. `Gateway` waits for envoy proxy + init.
+`GatewayImage` and `TailscaleSidecar` can run in parallel (independent). `EnvoyProxy` waits for sidecar + envoy config. `GatewayInit` waits for image + envoy proxy. `Gateway` waits for envoy proxy + init. `GatewayPostInit` waits for gateway health.
 
-| Component          | Type                            | Provider                             | Purpose                                                                |
-| ------------------ | ------------------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
-| `Server`           | `openclaw:infra:Server`         | `@pulumi/hcloud` + DO + OCI          | Provision VPS, expose IP + connection                                  |
-| `HostBootstrap`    | `openclaw:infra:HostBootstrap`  | `@pulumi/command`                    | Install Docker + fail2ban + optional unattended-upgrades on bare host  |
-| `EnvoyEgress`      | `openclaw:infra:EnvoyEgress`    | `@pulumi/command`                    | Render envoy.yaml + Corefile, upload configs, generate CA + MITM certs |
-| `GatewayImage`     | `openclaw:build:GatewayImage`   | `@pulumi/docker-build`               | BuildKit image build (Dockerfile + entrypoint rendered locally)        |
-| `TailscaleSidecar` | `openclaw:net:TailscaleSidecar` | `@pulumi/docker` + `@pulumi/command` | Bridge network, sidecar container, health wait, hostname capture       |
-| `EnvoyProxy`       | `openclaw:net:EnvoyProxy`       | `@pulumi/docker` + `@pulumi/command` | Envoy container + health wait                                          |
-| `GatewayInit`      | `openclaw:app:GatewayInit`      | `@pulumi/command`                    | Sequential init containers via `docker run --rm`, env var scanning     |
-| `Gateway`          | `openclaw:app:Gateway`          | `@pulumi/docker`                     | Gateway container (volumes + env + healthcheck)                        |
+| Component          | Type                            | Provider                             | Purpose                                                                   |
+| ------------------ | ------------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| `Server`           | `openclaw:infra:Server`         | `@pulumi/hcloud` + DO + OCI          | Provision VPS, expose IP + connection                                     |
+| `HostBootstrap`    | `openclaw:infra:HostBootstrap`  | `@pulumi/command`                    | Install Docker + fail2ban + optional unattended-upgrades on bare host     |
+| `EnvoyEgress`      | `openclaw:infra:EnvoyEgress`    | `@pulumi/command`                    | Render envoy.yaml + Corefile, upload configs, generate CA + MITM certs    |
+| `GatewayImage`     | `openclaw:build:GatewayImage`   | `@pulumi/docker-build`               | BuildKit image build (Dockerfile + entrypoint rendered locally)           |
+| `TailscaleSidecar` | `openclaw:net:TailscaleSidecar` | `@pulumi/docker` + `@pulumi/command` | Bridge network, sidecar container, health wait, hostname capture          |
+| `EnvoyProxy`       | `openclaw:net:EnvoyProxy`       | `@pulumi/docker` + `@pulumi/command` | Envoy container + health wait                                             |
+| `GatewayInit`      | `openclaw:app:GatewayInit`      | `@pulumi/command`                    | Grouped pre-start init containers via `docker run --rm`, env var scanning |
+| `GatewayPostInit`  | `openclaw:app:GatewayPostInit`  | `@pulumi/command`                    | Grouped post-start commands via `docker exec` after gateway healthy       |
+| `Gateway`          | `openclaw:app:Gateway`          | `@pulumi/docker`                     | Gateway container (volumes + env + healthcheck)                           |
 
 ## Network Topology
 
@@ -123,22 +125,22 @@ All containers per gateway share a single network namespace via the Tailscale si
 
 Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 
-| Key                          | Type                                          | Required | Description                                                                           |
-| ---------------------------- | --------------------------------------------- | -------- | ------------------------------------------------------------------------------------- |
-| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                                          |
-| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                                    |
-| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                                       |
-| `sshKeyId`                   | string                                        | no       | SSH key ID or name at provider (auto-generated if omitted)                            |
-| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                                           |
-| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                             |
-| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                                      |
-| `dockerhubPush`              | boolean                                       | no       | Build locally + push to Docker Hub (default: false)                                   |
-| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: false)                 |
-| `platform`                   | string                                        | no       | Docker platform of the VPS, e.g. `linux/amd64`. Required when `multiPlatform` is true |
-| `autoUpdate`                 | boolean                                       | no       | Automatic security updates via `unattended-upgrades` (default: false)                 |
-| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (`{ backups?: boolean }`)                                    |
-| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                       |
-| `gatewaySecretEnv-<profile>` | secret                                        | no       | JSON `{"KEY":"value"}` — env vars for init + runtime                                  |
+| Key                          | Type                                          | Required | Description                                                                              |
+| ---------------------------- | --------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `provider`                   | `"hetzner"` \| `"digitalocean"` \| `"oracle"` | yes      | VPS provider                                                                             |
+| `serverType`                 | string                                        | yes      | Server type (e.g. `cx22`, `cax21`)                                                       |
+| `region`                     | string                                        | yes      | Datacenter region (e.g. `fsn1`)                                                          |
+| `sshKeyId`                   | string                                        | no       | SSH key ID or name at provider (auto-generated if omitted)                               |
+| `tailscaleAuthKey`           | secret                                        | yes      | One-time Tailscale auth key                                                              |
+| `egressPolicy`               | `EgressRule[]`                                | yes      | User egress rules (additive to hardcoded)                                                |
+| `gateways`                   | `GatewayConfig[]`                             | yes      | Gateway profile definitions (1+)                                                         |
+| `dockerhubPush`              | boolean                                       | no       | Build locally + push to Docker Hub (default: false)                                      |
+| `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: false)                    |
+| `platform`                   | string                                        | no       | Docker platform of the VPS, e.g. `linux/amd64`. Required when `multiPlatform` is true    |
+| `autoUpdate`                 | boolean                                       | no       | Automatic security updates via `unattended-upgrades` (default: false)                    |
+| `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (`{ backups?: boolean }`)                                       |
+| `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                          |
+| `gatewayEnv-<profile>-<KEY>` | secret                                        | no       | Individual secret env var for init + runtime (e.g. `gatewayEnv-main-OPENROUTER_API_KEY`) |
 
 ## Deployment Model
 
@@ -156,8 +158,10 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 - SSH access is provided via Tailscale Serve TCP forwarding (port 22 → sshd on port 2222).
 - HTTPS access is provided via Tailscale Serve web handler (port 443 → gateway on loopback).
 - `TS_SERVE_CONFIG` points to a static JSON file rendered by `renderServeConfig()` — containerboot applies it automatically.
-- **Init containers** (`GatewayInit`) run _before_ the gateway container starts via ephemeral CLI containers (`docker run --rm --network none --user node`). This avoids crash-loops from missing config. Each `setupCommand` is a separate `command.remote.Command` resource. Env var scanning detects hostname-dependent commands — only those include the Tailscale hostname in their Pulumi command string, so hostname changes only re-run affected init steps.
-- **Secrets never persist on disk.** Init containers use `export SECRET='val' && docker run -e SECRET && unset SECRET`. No env files.
+- **Init containers** (`GatewayInit`) run _before_ the gateway container starts via ephemeral CLI containers (`docker run --rm --network none --user node`). Commands are organized into groups (`preStartCommands: Record<string, string[]>`) — each group runs in a single container (one cold start per group). Env var scanning detects which `$VAR` references each group uses and only includes those in Pulumi triggers, so env var changes only re-run affected groups.
+- **Post-start commands** (`GatewayPostInit`) run _after_ the gateway container is healthy via `docker exec`. Same grouped format as pre-start (`postStartCommands`). Used for commands that need a running gateway process (e.g. `openclaw system heartbeat disable`).
+- **Secret env vars** are set individually via `ocm env set <KEY> <VALUE>` or `pulumi config set --secret gatewayEnv-<profile>-<KEY>`. Each is its own encrypted Pulumi config entry — no JSON blobs. All env vars are available to all commands; scanning controls which trigger re-runs.
+- **Secrets never persist on disk.** Init containers receive secrets via SSH `AcceptEnv` (the `environment` property on `command.remote.Command`). No env files.
 - Gateway auth token is passed via `OPENCLAW_GATEWAY_TOKEN` env var (takes precedence over config file in local mode).
 - Docker provider connects to remote hosts via SSH (`ssh://root@<publicIP>`).
 

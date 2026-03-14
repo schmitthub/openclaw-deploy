@@ -155,6 +155,18 @@ export class GatewayImage extends pulumi.ComponentResource {
       },
     ];
 
+    // Ensure the named builder exists. Idempotent — skips if already created.
+    // This gives deterministic container/volume names so the provider reuses
+    // the same buildkit container and cache across deploys.
+    const ensureBuilder = new command.local.Command(
+      `${name}-ensure-builder`,
+      {
+        create:
+          "docker buildx inspect openclaw-builder >/dev/null 2>&1 || docker buildx create --name openclaw-builder --driver docker-container",
+      },
+      { parent: this },
+    );
+
     // The resource that downstream depends on — either a single Image or an Index.
     // imageDigestTrigger is the registry manifest digest — changes on every push,
     // used to force RemoteImage replacement (triggers, not pullTriggers).
@@ -178,7 +190,7 @@ export class GatewayImage extends pulumi.ComponentResource {
           `${name}-image-${arch}`,
           {
             tags: [archTag],
-
+            builder: { name: "openclaw-builder" },
             dockerfile: { location: path.join(tempDir, "Dockerfile") },
             context: { location: tempDir },
             platforms: [platform],
@@ -195,7 +207,7 @@ export class GatewayImage extends pulumi.ComponentResource {
             ],
             registries,
           },
-          { parent: this },
+          { parent: this, dependsOn: [ensureBuilder] },
         );
       });
 
@@ -228,6 +240,7 @@ export class GatewayImage extends pulumi.ComponentResource {
         `${name}-image`,
         {
           tags: [remoteTag],
+          builder: { name: "openclaw-builder" },
           dockerfile: { location: path.join(tempDir, "Dockerfile") },
           context: { location: tempDir },
           push: true,
@@ -236,7 +249,7 @@ export class GatewayImage extends pulumi.ComponentResource {
           cacheTo: [{ inline: {} }],
           registries,
         },
-        { parent: this },
+        { parent: this, dependsOn: [ensureBuilder] },
       );
       image = singleImage;
       imageDigestTrigger = singleImage.digest;
@@ -367,17 +380,29 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    // Ensure the named builder exists on the VPS
+    const ensureBuilder = new command.remote.Command(
+      `${name}-ensure-builder`,
+      {
+        connection: args.connection,
+        create:
+          "docker buildx inspect openclaw-builder >/dev/null 2>&1 || docker buildx create --name openclaw-builder --driver docker-container",
+      },
+      { parent: this },
+    );
+
     const image = new docker_build.Image(
       `${name}-image`,
       {
         tags: [tag],
+        builder: { name: "openclaw-builder" },
         dockerfile: { location: path.join(tempDir, "Dockerfile") },
         context: { location: tempDir },
         load: true,
         push: false,
         buildOnPreview: false,
       },
-      { parent: this, provider: buildProvider },
+      { parent: this, provider: buildProvider, dependsOn: [ensureBuilder] },
     );
 
     // Stop buildkit containers left behind by @pulumi/docker-build on the VPS

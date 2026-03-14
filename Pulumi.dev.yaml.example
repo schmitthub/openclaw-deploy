@@ -1,22 +1,25 @@
 config:
-  openclaw-deploy:autoUpdate: true
+  openclaw-deploy:autoUpdate: "true"
   openclaw-deploy:hetzner:
     backups: true
-  openclaw-deploy:dockerhubPush: true
-  # openclaw-deploy:multiPlatform: true  # Build for amd64 + arm64 (requires dockerhubPush + platform)
-  # openclaw-deploy:platform: linux/amd64  # Required when multiPlatform is true (e.g. linux/amd64, linux/arm64)
+  openclaw-deploy:dockerhubPush: "true"
+  openclaw-deploy:multiPlatform: "true"
+  openclaw-deploy:platform: linux/amd64
   openclaw-deploy:provider: hetzner
   openclaw-deploy:serverType: cx23
   openclaw-deploy:region: nbg1
   openclaw-deploy:egressPolicy:
     - action: allow
+      dst: mcp.deepwiki.com
+      proto: tls
+    - action: allow
       dst: pythonhosted.org
       proto: tls
     - action: allow
-      dst: "*.pythonhosted.org"
+      dst: '*.pythonhosted.org'
       proto: tls
     - action: allow
-      dst: "*.pypi.org"
+      dst: '*.pypi.org'
       proto: tls
     - action: allow
       dst: pypi.org
@@ -25,7 +28,7 @@ config:
       dst: discord.com
       proto: tls
     - action: allow
-      dst: "*.discord.gg"
+      dst: '*.discord.gg'
       proto: tls
     - action: allow
       dst: cdn.discordapp.com
@@ -43,10 +46,10 @@ config:
       dst: api.telegram.org
       proto: tls
     - action: allow
-      dst: "*.x.com"
+      dst: '*.x.com'
       proto: tls
     - action: allow
-      dst: "*.twimg.com"
+      dst: '*.twimg.com'
       proto: tls
     - action: allow
       dst: x.com
@@ -78,37 +81,52 @@ config:
     - action: allow
       dst: t.co
       proto: tls
+    - action: allow
+      dst: agentskills.io
+      proto: tls
+    - action: allow
+      dst: docs.openclaw.ai
+      proto: tls
   openclaw-deploy:gateways:
     - profile: main
-      version: 2026.3.7
+      version: 2026.3.12
       port: 18789
       installBrowser: true
-      setupCommands:
-        - >-
-          onboard --non-interactive --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health
-        - config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
-        - config set gateway.auth.mode token
-        - config set gateway.controlUi.dangerouslyDisableDeviceAuth true
-        - config set gateway.auth.trustedProxy.userHeader tailscale-user-login
-        - config set gateway.auth.trustedProxy.requiredHeaders "[\"x-forwarded-for\", \"x-forwarded-proto\"]"
-        - config set gateway.trustedProxies "[\"127.0.0.1/8\"]"
-        - config set tools.profile full
-        - config set skills.install.nodeManager pnpm
-        - config set agents.defaults.memorySearch.provider openai
-        - 'config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
-        - 'config set agents.defaults.memorySearch.remote.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"OPENROUTER_API_KEY\"}"'
-        - config set agents.defaults.memorySearch.model "google/gemini-embedding-001"
-        - config set tools.web.search.provider brave
-        - 'config set tools.web.search.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"BRAVE_API_KEY\"}"'
-        - 'config set channels.discord.token "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"DISCORD_BOT_TOKEN\"}"'
-        - 'config set channels.discord.allowFrom "[\"$DISCORD_USER_ID\"]"'
-        - config set channels.discord.dmPolicy allowlist
-        - config set channels.discord.groupPolicy allowlist
-        - 'config set channels.discord.guilds "{\"$DISCORD_SERVER_ID\": {\"users\": [\"$DISCORD_USER_ID\"], \"requireMention\": false}}"'
-        - config set channels.telegram.botToken "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"TELEGRAM_BOT_TOKEN\"}"
-        - config set channels.telegram.allowFrom "[\"$TELEGRAM_USER_ID\"]"
-        - config set channels.telegram.dmPolicy allowlist
-        - config set approvals.exec.enabled true
-        - config set tools.message.crossContext.allowAcrossProviders true
-        - config set approvals.exec.mode session
-        - config set agents.defaults.model.primary "openrouter/moonshotai/kimi-k2.5"
+      preStartCommands:
+        - name: openrouter
+          commands:
+            - openclaw onboard --non-interactive --accept-risk --mode local --gateway-bind loopback --gateway-token "$OPENCLAW_GATEWAY_TOKEN" --no-install-daemon --auth-choice openrouter-api-key --openrouter-api-key "$OPENROUTER_API_KEY" --skip-channels --skip-skills --skip-daemon --skip-health
+            - 'openclaw config set agents.defaults.memorySearch.remote.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"OPENROUTER_API_KEY\"}"'
+        - name: tailscale
+          commands:
+            - openclaw config set gateway.controlUi.allowedOrigins "[\"https://${TAILSCALE_SERVE_HOST}\", \"http://localhost:18789\", \"http://127.0.0.1:18789\"]"
+        - name: discord
+          commands:
+            - 'openclaw config set channels.discord.allowFrom "[\"$DISCORD_USER_ID\"]"'
+            - 'openclaw config set channels.discord.guilds "{\"$DISCORD_SERVER_ID\": {\"users\": [\"$DISCORD_USER_ID\"], \"requireMention\": false}}"'
+        - name: telegram
+          commands:
+            - openclaw config set channels.telegram.allowFrom "[\"$TELEGRAM_USER_ID\"]"
+        - name: default
+          commands:
+            - openclaw config set gateway.trustedProxies "[\"127.0.0.1/8\"]"
+            - openclaw config set gateway.auth.mode token
+            - openclaw config set gateway.auth.trustedProxy.userHeader tailscale-user-login
+            - openclaw config set gateway.auth.trustedProxy.requiredHeaders "[\"x-forwarded-for\", \"x-forwarded-proto\"]"
+            - openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true
+            - openclaw config set tools.profile full
+            - openclaw config set agents.defaults.userTimezone "America/Los_Angeles"
+            - openclaw config set skills.install.nodeManager pnpm
+            - openclaw config set agents.defaults.memorySearch.provider openai
+            - 'openclaw config set agents.defaults.memorySearch.remote.baseUrl "https://openrouter.ai/api/v1"'
+            - openclaw config set agents.defaults.memorySearch.model "google/gemini-embedding-001"
+            - openclaw config set tools.web.search.provider brave
+            - 'openclaw config set tools.web.search.apiKey "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"BRAVE_API_KEY\"}"'
+            - 'openclaw config set channels.discord.token "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"DISCORD_BOT_TOKEN\"}"'
+            - openclaw config set channels.discord.dmPolicy allowlist
+            - openclaw config set channels.discord.groupPolicy allowlist
+            - openclaw config set channels.telegram.botToken "{\"source\":\"env\",\"provider\":\"default\",\"id\":\"TELEGRAM_BOT_TOKEN\"}"
+            - openclaw config set channels.telegram.dmPolicy allowlist
+            - openclaw config set agents.defaults.model.primary "openrouter/minimax/minimax-m2.5"
+            - openclaw config set tools.message.crossContext.allowAcrossProviders true
+            - openclaw config set cron.maxConcurrentRuns 2

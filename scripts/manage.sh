@@ -424,6 +424,39 @@ cmd_ps() {
   _docker ps "$@"
 }
 
+cmd_env() {
+  _resolve_stack
+  _resolve_profile
+  local subcmd="${1:-}"
+  shift || true
+
+  case "$subcmd" in
+    set)
+      local key="${1:-}"
+      local value="${2:-}"
+      [[ -z "$key" ]] && _die "Usage: ocm env set <KEY> <VALUE>"
+      [[ -z "$value" ]] && _die "Usage: ocm env set <KEY> <VALUE>"
+      _pulumi config set --secret "gatewayEnv-${OCM_PROFILE}-${key}" "$value"
+      _ok "✓ gatewayEnv-${OCM_PROFILE}-${key}"
+      ;;
+    list|ls)
+      _info "[env] Profile: $OCM_PROFILE (stack: $OCM_STACK)"
+      local prefix="openclaw-deploy:gatewayEnv-${OCM_PROFILE}-"
+      _pulumi config --json \
+        | jq -r --arg pfx "$prefix" 'to_entries[] | select(.key | startswith($pfx)) | .key | ltrimstr($pfx)'
+      ;;
+    delete|rm)
+      local key="${1:-}"
+      [[ -z "$key" ]] && _die "Usage: ocm env delete <KEY>"
+      _pulumi config rm "gatewayEnv-${OCM_PROFILE}-${key}"
+      _ok "✓ Removed gatewayEnv-${OCM_PROFILE}-${key}"
+      ;;
+    *)
+      _die "Usage: ocm env <set|list|delete> [args...]"
+      ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------
@@ -451,6 +484,9 @@ ${BOLD}COMMANDS${RESET}
   health                Full system health (VPS host + disk + memory + containers)
   ts-status             Tailscale status from sidecar
   bypass [duration]     Firewall bypass SOCKS proxy (default: 30s)
+  env set <K> <V>       Set a secret env var (gatewayEnv-<profile>-<KEY>)
+  env list              List env var keys for current profile
+  env delete <K>        Remove an env var
   ps [args]             Docker ps on VPS
   help                  Show this help
 
@@ -515,6 +551,7 @@ case "$SUBCOMMAND" in
   health)     cmd_health "$@" ;;
   ts-status)  cmd_ts_status "$@" ;;
   bypass)     cmd_bypass "$@" ;;
+  env)        cmd_env "$@" ;;
   ps)         cmd_ps "$@" ;;
   help|-h|--help) cmd_help ;;
   *) _die "Unknown command '$SUBCOMMAND'. Run 'ocm help' for usage." ;;
