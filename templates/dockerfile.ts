@@ -149,9 +149,28 @@ RUN mkdir -p "\${OPENCLAW_CONFIG_DIR}" "\${OPENCLAW_WORKSPACE_DIR}" && \\
 RUN SHARP_IGNORE_GLOBAL_LIBVIPS=1 NODE_OPTIONS=--max-old-space-size=2048 \\
     npm install -g --no-fund --no-audit "openclaw@\${OPENCLAW_VERSION}"
 
-# CLI symlink for consistent access across users
-RUN ln -sf "$(npm root -g)/openclaw/dist/entry.js" /usr/local/bin/openclaw && \\
-    chmod 755 "$(npm root -g)/openclaw/dist/entry.js"
+# WORKAROUND: Route CLI commands through Bun instead of Node.
+#
+# OpenClaw's bundled JS (~69MB) takes 7+ seconds to parse on Skylake Xeon CPUs
+# under Node's V8 engine. The gateway enforces a 3s handshake timeout on WS
+# connections (DEFAULT_HANDSHAKE_TIMEOUT_MS in server-constants.ts). CLI commands
+# open a WebSocket to the gateway, but V8's synchronous startup blocks the event
+# loop so the CLI can't respond to the WS challenge before the 3s timeout expires.
+#
+# Bun's JavaScriptCore engine parses the same bundles in ~150ms, avoiding the issue.
+# The gateway process itself still runs on Node (via entrypoint CMD) — only CLI
+# invocations (probe, config, cron, devices, etc.) use Bun.
+#
+# Upstream refs:
+#   https://github.com/openclaw/openclaw/issues/45560
+#   https://github.com/openclaw/openclaw/issues/45940
+#
+# Remove this workaround when upstream bumps the handshake timeout or optimizes
+# CLI startup.
+RUN OPENCLAW_ENTRY="$(npm root -g)/openclaw/dist/entry.js" && \\
+    echo '#!/bin/sh' > /usr/local/bin/openclaw && \\
+    echo "exec bun \\"$OPENCLAW_ENTRY\\" \\"\\$@\\"" >> /usr/local/bin/openclaw && \\
+    chmod 755 /usr/local/bin/openclaw
 
 # Optional: install Chromium + Xvfb for browser automation.
 ${renderBrowserBlock(opts.installBrowser ?? false)}

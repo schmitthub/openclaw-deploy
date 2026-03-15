@@ -189,10 +189,10 @@ describe("renderDockerfile", () => {
     expect(df).toContain("chmod 700 /usr/local/bin/firewall-bypass");
   });
 
-  it("creates CLI symlink", () => {
+  it("creates CLI wrapper", () => {
     const df = renderDockerfile(defaultOpts);
-    expect(df).toContain("ln -sf");
     expect(df).toContain("/usr/local/bin/openclaw");
+    expect(df).toContain("exec bun");
   });
 
   it("does not install Tailscale CLI (handled by sidecar container)", () => {

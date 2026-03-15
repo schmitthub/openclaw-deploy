@@ -339,17 +339,19 @@ export class GatewayImage extends pulumi.ComponentResource {
       return match.sha256Digest;
     });
 
-    // pullTriggers with registry digest as source of truth. When the digest
-    // changes, Pulumi replaces the resource (destroy + create). forceRemove
-    // ensures the destroy step removes the image even when running containers
-    // reference it — without this, findImage() finds the stale local tag and
-    // skips the pull entirely (kreuzwerker/terraform-provider-docker behavior).
+    // Two triggers ensure the pull always fires:
+    // 1. pullDigest (registry manifest) — catches out-of-band pushes and
+    //    state desync (registry is the source of truth)
+    // 2. imageDigestTrigger (build output) — catches same-deploy rebuilds
+    //    where the image hasn't been pushed to the registry yet at plan time
+    // forceRemove ensures destroy removes the image even when running
+    // containers reference it (findImage() short-circuit workaround).
     const pulledImage = new docker.RemoteImage(
       `${name}-pull`,
       {
         name: pullTag,
         platform: args.platform,
-        pullTriggers: [pullDigest],
+        pullTriggers: [pullDigest, imageDigestTrigger],
         forceRemove: true,
       },
       {
