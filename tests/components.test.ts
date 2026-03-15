@@ -73,6 +73,17 @@ beforeAll(() => {
             state.ref ?? "docker.io/mock/repo:tag@sha256:mockindexdigest";
         }
 
+        // docker.RemoteImage — provide inspectable pull outputs
+        if (args.type === "docker:index/remoteImage:RemoteImage") {
+          const imageName =
+            (state.name as string | undefined) ?? "docker.io/mock/repo:tag";
+          state.imageId =
+            state.imageId ?? `${imageName}@sha256:mockremoteimageid`;
+          state.repoDigest =
+            state.repoDigest ??
+            `${imageName}@sha256:mockrepodigest1234567890abcdef`;
+        }
+
         // command.remote.Command — provide stdout/stderr
         if (args.type === "command:remote:Command") {
           state.stdout = state.stdout ?? "mock-stdout";
@@ -82,6 +93,30 @@ beforeAll(() => {
         return { id: `${args.name}-id`, state };
       },
       call: (args: pulumi.runtime.MockCallArgs) => {
+        if (
+          args.token ===
+          "docker:index/getRegistryImageManifests:getRegistryImageManifests"
+        ) {
+          const name =
+            (args.inputs["name"] as string | undefined) ??
+            "docker.io/mock/repo:tag";
+          return {
+            name,
+            manifests: [
+              {
+                architecture: "amd64",
+                os: "linux",
+                sha256Digest: "sha256:mockamd64manifestdigest1234567890",
+              },
+              {
+                architecture: "arm64",
+                os: "linux",
+                sha256Digest: "sha256:mockarm64manifestdigest1234567890",
+              },
+            ],
+          };
+        }
+
         // oci.core.getVnicAttachments — return a mock VNIC attachment
         if (args.token === "oci:Core/getVnicAttachments:getVnicAttachments") {
           return {
@@ -949,7 +984,9 @@ describe("GatewayImage component", () => {
     });
 
     const imageName = await promiseOf(img.imageName);
-    expect(imageName).toBe("docker.io/myuser/openclaw:dev-latest");
+    expect(imageName).toBe(
+      "docker.io/myuser/openclaw:dev-latest@sha256:mockremoteimageid",
+    );
   });
 
   it("keeps localhost registries unprefixed in dockerhubPush mode", async () => {
@@ -967,6 +1004,8 @@ describe("GatewayImage component", () => {
     });
 
     const imageName = await promiseOf(img.imageName);
-    expect(imageName).toBe("localhost:5000/openclaw:dev-latest");
+    expect(imageName).toBe(
+      "localhost:5000/openclaw:dev-latest@sha256:mockremoteimageid",
+    );
   });
 });

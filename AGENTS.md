@@ -175,6 +175,16 @@ Before considering work complete, agents should:
 - Run `pulumi preview` (if a stack is configured) to verify no resource errors.
 - Ensure no new `any` types or type assertions without justification.
 
+## Research Protocol (Critical — Follow Before Writing Code)
+
+When planning features or fixing bugs that involve Pulumi providers, Docker, or any infrastructure tooling:
+
+1. **DeepWiki first.** Query DeepWiki (`mcp__deepwiki__ask_question`) for the relevant provider/tool repository. Ask about the specific problem or API surface — do not lead with a proposed solution. DeepWiki indexes the actual source code and docs, so it surfaces first-class provider features that workarounds would miss.
+2. **Provider docs second.** If DeepWiki doesn't cover it, check the official provider documentation (e.g. Pulumi registry pages, Docker docs). Use `WebFetch` or `context7` to read the docs directly.
+3. **Neo as reaffirming opinion only.** Use Pulumi Neo (`neo-bridge`) to validate the approach against the stack's actual state and update history. Neo is good at reading Pulumi state, update diffs, and resource lifecycle events. It is **not** a domain expert on provider APIs — it's an LLM with limited additional context, not a Pulumi engineer. Do not treat its recommendations as authoritative for how a provider resource works. Always verify against docs.
+
+**Do not skip to implementation based on assumptions.** A workaround that ignores a provider's built-in solution creates tech debt and silent failures. The `RemoteImage` + `pullTriggers` + `getRegistryImage` pattern is an example — the provider had a documented first-class solution for dynamic image pulls, but it was missed because research was skipped.
+
 ## Contribution Guidelines for Agents
 
 - **Research before changing infrastructure or build configuration.** Before modifying Docker builds, Pulumi resources, network config, or any infrastructure-affecting code: read the relevant provider/tool documentation, understand the full implications (caching, performance, cross-platform behavior, state management), and verify your approach handles all supported deployment targets (amd64 + arm64, all VPS providers). A one-line change to a build resource can break caching, double build times, or cause architecture-specific failures. Do not treat infrastructure changes as trivial — always think through second-order effects.

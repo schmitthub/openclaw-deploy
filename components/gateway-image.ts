@@ -35,7 +35,7 @@ export interface GatewayImageArgs {
 }
 
 export class GatewayImage extends pulumi.ComponentResource {
-  /** The image tag, e.g. "openclaw-gateway-dev:latest" or "registry/openclaw-gateway-dev:latest" */
+  /** Image reference for the gateway container. For pulled images this is the host-local image ID; for on-host builds it remains the tag. */
   public readonly imageName: pulumi.Output<string>;
   /** Stable image change token. Changes when build inputs change and, for pulled images, prefers the remote repo digest. */
   public readonly imageDigest: pulumi.Output<string>;
@@ -272,6 +272,7 @@ export class GatewayImage extends pulumi.ComponentResource {
     // (pulumi/pulumi-docker-build#65). Build cache is stored in named Docker volumes
     // and survives container stop — the provider restarts them on the next build.
     // Depends on commitTag (last local buildx operation) to avoid race conditions.
+    // Non-fatal: failure just means buildkit containers keep running (cache buildup).
     new command.local.Command(
       `${name}-buildkit-cleanup`,
       {
@@ -300,54 +301,67 @@ export class GatewayImage extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    // Pull by stable version tag — re-pull gated by stable build inputs.
+    // Pull by stable version tag — re-pull gated by registry digest.
     // Use docker.io/ prefix so the provider matches registryAuth address.
-    // Treat a first path segment as an explicit registry if it contains a dot,
-    // contains a port, or is "localhost" (Docker reference semantics).
     const pullTag = hasExplicitRegistry(remoteTag)
       ? remoteTag
       : `docker.io/${remoteTag}`;
 
-    // Remove stale local image before pulling. The Docker provider's findImage()
-    // short-circuits on local tag match and ignores the platform field, so a cached
-    // arm64 image prevents re-pulling the correct amd64 variant.
-    const removeStale = new command.remote.Command(
-      `${name}-remove-stale`,
+    // Query the registry for the current manifest digests. This is the source
+    // of truth — it reflects what was actually pushed, not what we built locally.
+    // Uses getRegistryImageManifests (not getRegistryImage) because we push
+    // multi-arch manifest lists. Auth is passed directly — no provider needed
+    // for registry API calls, which are independent of any Docker daemon.
+    const registryManifests = docker.getRegistryImageManifestsOutput(
       {
-        connection: args.connection,
-        create: `docker rmi ${pullTag} 2>/dev/null || true`,
-        triggers: [
-          imageDigestTrigger,
-          ...(args.platform ? [args.platform] : []),
-        ],
+        name: remoteTag,
+        authConfig: {
+          address: "registry-1.docker.io",
+          username,
+          password,
+        },
       },
-      { parent: this, dependsOn: [image] },
+      { parent: this },
     );
 
-    // Use triggers (not pullTriggers) to force resource replacement on digest change.
-    // pullTriggers does in-place update where findImage() can short-circuit on local tag.
-    // triggers forces delete+create = guaranteed fresh pull.
-    new docker.RemoteImage(
+    // Extract the digest for the target platform. For single-platform builds,
+    // there's only one manifest. For multi-platform, match the VPS architecture.
+    const targetArch = args.platform?.split("/")[1] ?? "amd64";
+    const pullDigest = registryManifests.manifests.apply((manifests) => {
+      const match = manifests.find(
+        (m) => m.architecture === targetArch && m.os === "linux",
+      );
+      if (!match) {
+        throw new Error(
+          `No manifest found for linux/${targetArch} in ${remoteTag}`,
+        );
+      }
+      return match.sha256Digest;
+    });
+
+    // pullTriggers with registry digest as source of truth. When the digest
+    // changes, Pulumi replaces the resource (destroy + create). forceRemove
+    // ensures the destroy step removes the image even when running containers
+    // reference it — without this, findImage() finds the stale local tag and
+    // skips the pull entirely (kreuzwerker/terraform-provider-docker behavior).
+    const pulledImage = new docker.RemoteImage(
       `${name}-pull`,
       {
         name: pullTag,
         platform: args.platform,
-        triggers: {
-          digest: imageDigestTrigger,
-          ...(args.platform ? { platform: args.platform } : {}),
-        },
-        keepLocally: true,
+        pullTriggers: [pullDigest],
+        forceRemove: true,
       },
       {
         parent: this,
         provider: remoteDockerProvider,
-        dependsOn: [image, removeStale],
+        dependsOn: [image],
       },
     );
 
     return {
-      imageName: pulumi.output(pullTag),
-      imageDigest: imageDigestTrigger,
+      imageName: pulledImage.imageId,
+      imageDigest: pullDigest,
     };
   }
 
@@ -409,6 +423,7 @@ export class GatewayImage extends pulumi.ComponentResource {
     // Stop buildkit containers left behind by @pulumi/docker-build on the VPS
     // (pulumi/pulumi-docker-build#65). Build cache is stored in named Docker volumes
     // and survives container stop — the provider restarts them on the next build.
+    // Non-fatal: failure just means buildkit containers keep running (cache buildup).
     new command.remote.Command(
       `${name}-buildkit-cleanup`,
       {
