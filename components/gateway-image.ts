@@ -307,43 +307,15 @@ export class GatewayImage extends pulumi.ComponentResource {
       ? remoteTag
       : `docker.io/${remoteTag}`;
 
-    // Query the registry for the current manifest digests. This is the source
-    // of truth — it reflects what was actually pushed, not what we built locally.
-    // Uses getRegistryImageManifests (not getRegistryImage) because we push
-    // multi-arch manifest lists. Auth is passed directly — no provider needed
-    // for registry API calls, which are independent of any Docker daemon.
-    const registryManifests = docker.getRegistryImageManifestsOutput(
-      {
-        name: remoteTag,
-        authConfig: {
-          address: "registry-1.docker.io",
-          username,
-          password,
-        },
-      },
-      { parent: this },
-    );
-
-    // Extract the digest for the target platform. For single-platform builds,
-    // there's only one manifest. For multi-platform, match the VPS architecture.
-    const targetArch = args.platform?.split("/")[1] ?? "amd64";
-    const pullDigest = registryManifests.manifests.apply((manifests) => {
-      const match = manifests.find(
-        (m) => m.architecture === targetArch && m.os === "linux",
-      );
-      if (!match) {
-        throw new Error(
-          `No manifest found for linux/${targetArch} in ${remoteTag}`,
-        );
-      }
-      return match.sha256Digest;
-    });
-
-    // Two triggers ensure the pull always fires:
-    // 1. pullDigest (registry manifest) — catches out-of-band pushes and
-    //    state desync (registry is the source of truth)
-    // 2. imageDigestTrigger (build output) — catches same-deploy rebuilds
-    //    where the image hasn't been pushed to the registry yet at plan time
+    // Pull trigger uses the build output digest only. A previous design also
+    // queried the registry via getRegistryImageManifestsOutput as a second
+    // trigger, but that data source runs at plan time (before the build) so it
+    // always captures the PRE-build digest. After a build pushes a new image,
+    // the registry content changes but the state already recorded the stale
+    // pre-build value — causing a spurious replacement on the next deploy.
+    // The build digest is sufficient: it changes whenever build inputs change,
+    // which is the only time a new image is pushed.
+    //
     // forceRemove ensures destroy removes the image even when running
     // containers reference it (findImage() short-circuit workaround).
     const pulledImage = new docker.RemoteImage(
@@ -351,7 +323,7 @@ export class GatewayImage extends pulumi.ComponentResource {
       {
         name: pullTag,
         platform: args.platform,
-        pullTriggers: [pullDigest, imageDigestTrigger],
+        pullTriggers: [imageDigestTrigger],
         forceRemove: true,
       },
       {
@@ -363,7 +335,7 @@ export class GatewayImage extends pulumi.ComponentResource {
 
     return {
       imageName: pulledImage.imageId,
-      imageDigest: pullDigest,
+      imageDigest: imageDigestTrigger,
     };
   }
 

@@ -480,6 +480,22 @@ describe("HostBootstrap component", () => {
     const dockerHost = await promiseOf(bootstrap.dockerHost);
     expect(dockerHost).toMatch(/^ssh:\/\/root@/);
   });
+
+  it("creates successfully with timezone set", async () => {
+    const { HostBootstrap } = await import("../components/bootstrap");
+    const bootstrap = new HostBootstrap("test-bootstrap-timezone", {
+      connection: { host: "1.2.3.4", user: "root" },
+      timezone: "America/Los_Angeles",
+    });
+
+    expect(bootstrap).toBeDefined();
+
+    const dockerReady = await promiseOf(bootstrap.dockerReady);
+    expect(dockerReady).toBe("ready");
+
+    const dockerHost = await promiseOf(bootstrap.dockerHost);
+    expect(dockerHost).toMatch(/^ssh:\/\/root@/);
+  });
 });
 
 describe("EnvoyEgress component MITM validation", () => {

@@ -121,6 +121,7 @@ export interface StackConfig {
 
   // Host management
   autoUpdate?: boolean; // automatic security updates via unattended-upgrades (default: false)
+  timezone?: string; // IANA timezone for VPS (e.g. "America/Los_Angeles", "UTC"). Default: OS default.
 
   // Build
   dockerhubPush?: boolean; // build locally + push to Docker Hub (default: false)

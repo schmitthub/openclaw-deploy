@@ -4,6 +4,7 @@ import * as command from "@pulumi/command";
 export interface HostBootstrapArgs {
   connection: pulumi.Input<command.types.input.remote.ConnectionArgs>;
   autoUpdate?: boolean;
+  timezone?: string;
 }
 
 export class HostBootstrap extends pulumi.ComponentResource {
@@ -57,7 +58,23 @@ export class HostBootstrap extends pulumi.ComponentResource {
       );
     }
 
-    // Step 1b: Configure SSH AcceptEnv so Pulumi can pass env vars via setenv.
+    // Step 1b: Set VPS timezone (opt-in). Uses timedatectl which works on all
+    // supported providers (Hetzner/Ubuntu, DigitalOcean/Ubuntu, Oracle/Oracle Linux).
+    let setTimezone: command.remote.Command | undefined;
+    if (args.timezone) {
+      const TIMEZONE_CMD = `timedatectl set-timezone ${args.timezone}`;
+      setTimezone = new command.remote.Command(
+        `${name}-timezone`,
+        {
+          connection: args.connection,
+          create: TIMEZONE_CMD,
+          triggers: [TIMEZONE_CMD],
+        },
+        { parent: this, dependsOn: [installDocker] },
+      );
+    }
+
+    // Step 1c: Configure SSH AcceptEnv so Pulumi can pass env vars via setenv.
     // Separate resource so it runs even when installDocker is already in state.
     // Uses sshd_config.d/ for global scope (avoids Match block scoping issues).
     // Service name varies: ssh (Ubuntu/Debian) vs sshd (RHEL/Fedora/Hetzner).
@@ -81,6 +98,7 @@ export class HostBootstrap extends pulumi.ComponentResource {
       configureAcceptEnv.stdout,
     ];
     if (enableAutoUpdates) bootstrapOutputs.push(enableAutoUpdates.stdout);
+    if (setTimezone) bootstrapOutputs.push(setTimezone.stdout);
     this.dockerReady = pulumi.all(bootstrapOutputs).apply(() => "ready");
 
     const conn = pulumi.output(args.connection);

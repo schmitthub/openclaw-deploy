@@ -138,6 +138,7 @@ Configuration is managed via `pulumi config` / `Pulumi.<stack>.yaml`:
 | `multiPlatform`              | boolean                                       | no       | Build for amd64 + arm64 when `dockerhubPush` is true (default: false)                    |
 | `platform`                   | string                                        | no       | Docker platform of the VPS, e.g. `linux/amd64`. Required when `multiPlatform` is true    |
 | `autoUpdate`                 | boolean                                       | no       | Automatic security updates via `unattended-upgrades` (default: false)                    |
+| `timezone`                   | string                                        | no       | IANA timezone for VPS (e.g. `America/Los_Angeles`). Default: OS default.                 |
 | `hetzner`                    | `HetznerConfig`                               | no       | Hetzner-specific options (`{ backups?: boolean }`)                                       |
 | `gatewayToken-<profile>`     | secret                                        | no       | Auth token override (auto-generated if omitted)                                          |
 | `gatewayEnv-<profile>-<KEY>` | secret                                        | no       | Individual secret env var for init + runtime (e.g. `gatewayEnv-main-OPENROUTER_API_KEY`) |

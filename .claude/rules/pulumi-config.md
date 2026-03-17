@@ -30,6 +30,7 @@ config:
   # openclaw-deploy:multiPlatform: true  # Optional: build amd64 + arm64 (requires dockerhubPush + platform)
   # openclaw-deploy:platform: linux/amd64  # Required when multiPlatform is true (e.g. linux/amd64, linux/arm64)
   # openclaw-deploy:autoUpdate: true  # Optional: automatic security updates via unattended-upgrades
+  # openclaw-deploy:timezone: America/Los_Angeles  # Optional: IANA timezone for VPS
   # openclaw-deploy:hetzner:  # Optional: Hetzner-specific options
   #   backups: true  # automatic daily backups (+20% server cost)
   openclaw-deploy:gatewayToken-dev:
@@ -45,6 +46,7 @@ cfg.getBoolean("dockerhubPush");   // optional boolean (default: false)
 cfg.getBoolean("multiPlatform");   // optional boolean (default: false, only with dockerhubPush)
 cfg.get("platform");               // optional string (e.g. "linux/amd64", required when multiPlatform is true)
 cfg.getBoolean("autoUpdate");      // optional boolean (default: false)
+cfg.get("timezone");               // optional string (e.g. "America/Los_Angeles")
 cfg.getObject<HetznerConfig>("hetzner"); // optional provider-specific config (validated at runtime)
 cfg.requireSecret("tailscaleAuthKey"); // secret string
 cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
@@ -66,7 +68,7 @@ cfg.requireObject<EgressRule[]>("egressPolicy"); // structured object
 ## Component Argument Patterns
 Components accept typed args interfaces (5 per gateway, plus shared infra):
 - `ServerArgs`: provider, serverType, region?, sshKeyId?, image?, hetzner?, compartmentId?, subnetId?, ocpus?, memoryInGbs?
-- `HostBootstrapArgs`: connection, autoUpdate?
+- `HostBootstrapArgs`: connection, autoUpdate?, timezone?
 - `EnvoyEgressArgs`: connection, egressPolicy
 - `GatewayImageArgs`: connection, dockerHost, profile, version, installBrowser?, imageSteps?, dockerhubPush?, multiPlatform?, platform?
 - `TailscaleSidecarArgs`: connection, dockerHost, profile, port, tailscaleAuthKey, tcpPortMappings?
