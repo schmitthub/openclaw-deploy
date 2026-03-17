@@ -104,6 +104,7 @@ const server = new Server("server", {
 const bootstrap = new HostBootstrap("bootstrap", {
   connection: server.connection,
   autoUpdate: cfg.getBoolean("autoUpdate") ?? false,
+  timezone: cfg.get("timezone"),
 });
 
 // 3. Render egress config + generate certificates

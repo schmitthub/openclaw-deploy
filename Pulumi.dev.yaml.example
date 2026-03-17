@@ -1,5 +1,6 @@
 config:
   openclaw-deploy:autoUpdate: "true"
+  openclaw-deploy:timezone: America/Los_Angeles
   openclaw-deploy:hetzner:
     backups: true
   openclaw-deploy:dockerhubPush: "true"
